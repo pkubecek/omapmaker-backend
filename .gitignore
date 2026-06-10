@@ -1,0 +1,8 @@
+venv/
+venv311/
+__pycache__/
+*.pyc
+jobs/
+*.laz
+*.las
+*.tif
