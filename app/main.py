@@ -22,7 +22,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "https://omapmaker.vercel.app",
+        "https://omapmaker-lro9dvn3t-josef-kubecek-s-projects.vercel.app",
         # Pro produkci přidej svou doménu, např. "https://omapmaker.example.com"
     ],
     allow_credentials=True,
