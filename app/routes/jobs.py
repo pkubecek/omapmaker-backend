@@ -157,3 +157,19 @@ async def get_gpkg(job_id: str):
         raise HTTPException(status_code=404, detail="GPKG nenalezeno.")
     return FileResponse(gpkg_path, media_type="application/geopackage+sqlite3",
                         filename=f"OOM_{job_id}.gpkg")
+
+
+@router.get("/crt/{filename}")
+async def get_crt(filename: str):
+    """Vrátí .crt soubor pro import do OpenOrienteering Mapperu."""
+    # Hledáme CRT soubory v kořeni projektu
+    for search_dir in [
+        ".",
+        os.path.join(os.path.dirname(__file__), "..", ".."),
+        os.path.join(os.path.dirname(__file__), ".."),
+    ]:
+        path = os.path.join(search_dir, filename)
+        if os.path.exists(path) and filename.endswith(".crt"):
+            return FileResponse(path, media_type="application/octet-stream",
+                                filename=filename)
+    raise HTTPException(status_code=404, detail=f"Soubor {filename} nenalezen.")
