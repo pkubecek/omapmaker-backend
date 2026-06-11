@@ -233,6 +233,17 @@ def render_map(
     map_minx, map_maxx, map_miny, map_maxy = map_extent
     clip_box_map = box(map_minx, map_miny, map_maxx, map_maxy)
 
+    # Dummy gridy pro add_vector_layers pokud nejsou k dispozici (tile mode)
+    if grid_x is None or grid_y is None:
+        _nx = max(10, int((map_maxx - map_minx) / 50))
+        _ny = max(10, int((map_maxy - map_miny) / 50))
+        grid_x, grid_y = np.mgrid[map_minx:map_maxx:complex(0, _nx),
+                                    map_miny:map_maxy:complex(0, _ny)]
+    if dmr_grid_linear is None:
+        dmr_grid_linear = np.zeros_like(grid_x)
+    if dmr_grid_cubic is None:
+        dmr_grid_cubic = np.zeros_like(grid_x)
+
     # Magnetický sever
     if layer_visibility.get("magnetic_lines", False):
         add_magnetic_north_lines(ax, map_extent, scale, rotation=north_rotation,
@@ -320,7 +331,7 @@ def render_map(
         )
 
     # Uložení PNG
-    _cb("Ukládám PNG (300 DPI)...")
+    _cb("Ukládám PNG (1000 DPI)...")
     plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
     transparent = paper_format == "Data Extent"
     plt.savefig(output_png_path, dpi=1000, bbox_inches="tight",

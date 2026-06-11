@@ -1,19 +1,31 @@
 """
-pipeline.py — orchestrace celé analýzy jako jeden job.
-Volá processor → renderer → exporter, reportuje průběh přes callback.
+pipeline.py — tile-based orchestrace analýzy.
+
+Oblast se rozdělí na dlaždice max TILE_SIZE_M × TILE_SIZE_M s překryvem OVERLAP_M.
+Každá dlaždice se zpracuje samostatně (DTM, DSM, vegetace, skály, vrstevnice).
+Výsledky se sloučí do finálního PNG a GPKG.
 """
 import os
+import gc
 import time
+import math
 import tempfile
 import numpy as np
+import rasterio
 import rasterio.transform
 import rasterio.features
+import rasterio.merge
 import geopandas as gpd
 import osmnx as ox
 import fiona
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from PIL import Image
 from pyproj import CRS, Transformer
 from shapely.geometry import box
 from rasterio.features import rasterize
+from rasterio.io import MemoryFile
 
 from .processor import (
     load_dmr_grid, load_dmp_grid,
@@ -21,23 +33,252 @@ from .processor import (
     find_depressions, find_knolls,
     make_clip_polygon,
 )
-from .renderer import render_map, generate_contour_layers
+from .renderer import generate_contour_layers, setup_map_figure
 from .symbols import SymbolLibrary
-from .exporter import export_gpkg
+from .exporter import OomCollector
+
+# Max velikost dlaždice v metrech. 1500×1500m při 0.5m pixelu = 9M pixelů = ~700 MB
+TILE_SIZE_M = 1500
+OVERLAP_M = 150   # překryv kvůli artefaktům na hranicích
+
+
+def _compute_tiles(minx, maxx, miny, maxy, tile_size, overlap):
+    """Vrátí seznam (tx0, tx1, ty0, ty1) dlaždic s překryvem."""
+    tiles = []
+    x = minx
+    while x < maxx:
+        x1 = min(x + tile_size, maxx)
+        y = miny
+        while y < maxy:
+            y1 = min(y + tile_size, maxy)
+            # S překryvem
+            tx0 = max(minx, x - overlap)
+            tx1 = min(maxx, x1 + overlap)
+            ty0 = max(miny, y - overlap)
+            ty1 = min(maxy, y1 + overlap)
+            tiles.append((tx0, tx1, ty0, ty1, x, x1, y, y1))
+            y = y1
+        x = x1
+    return tiles
+
+
+def _process_tile(
+    tile_bbox, dmr_path, dmp_path, params, sym_library,
+    gdf_osm, zabaged_gdfs, isom_gdfs,
+    tile_idx, total_tiles, cb,
+):
+    """
+    Zpracuje jednu dlaždici. Vrátí dict s GeoDataFrames a numpy gridy.
+    tx0,tx1,ty0,ty1 = bbox s překryvem (zpracovává se)
+    core_x0,x1,y0,y1 = core bbox bez překryvu (vystřihuje se)
+    """
+    tx0, tx1, ty0, ty1, core_x0, core_x1, core_y0, core_y1 = tile_bbox
+    pct_base = int(10 + (tile_idx / total_tiles) * 70)
+
+    CURRENT_CRS = params["crs"]
+    SIGMA = params["sigma"]
+    SLOPE_THRESHOLD = params["slope_threshold"]
+    BINS = params["bins"]
+    FIXED_PIXEL_SIZE = 0.5
+
+    def tcb(msg):
+        cb(pct_base, f"Dlaždice {tile_idx+1}/{total_tiles}: {msg}")
+
+    tcb("Načítám DTM...")
+    try:
+        dmr_grid_cubic, grid_x, grid_y, extent, dmr_points, dmr_z = load_dmr_grid(
+            dmr_path, CURRENT_CRS,
+            pixel_size=FIXED_PIXEL_SIZE,
+            sigma_smooth=SIGMA,
+            bbox_clip=(tx0, tx1, ty0, ty1),
+            progress_cb=tcb,
+        )
+    except Exception as e:
+        print(f"[tile {tile_idx}] DTM chyba: {e}")
+        return None
+
+    minx, maxx, miny, maxy = extent
+    shape = grid_x.shape
+    transform = rasterio.transform.from_bounds(minx, miny, maxx, maxy,
+                                                width=shape[0], height=shape[1])
+    clip_polygon = make_clip_polygon(dmr_points)
+
+    # Linear DTM
+    from scipy.interpolate import griddata
+    shift_x = np.mean(dmr_points[:, 0])
+    shift_y = np.mean(dmr_points[:, 1])
+    pts_sh = dmr_points - np.array([shift_x, shift_y])
+    gx_sh = grid_x - shift_x
+    gy_sh = grid_y - shift_y
+    dmr_grid_linear = griddata(pts_sh, dmr_z, (gx_sh, gy_sh), method="linear")
+    if np.isnan(dmr_grid_linear).all():
+        dmr_grid_linear = griddata(pts_sh, dmr_z, (gx_sh, gy_sh), method="nearest")
+
+    # DSM
+    tcb("Načítám DSM...")
+    try:
+        dmp_grid = load_dmp_grid(dmp_path, grid_x, grid_y, extent, CURRENT_CRS)
+        vegetation_height = np.clip(dmp_grid - dmr_grid_linear, 0, None)
+        del dmp_grid
+    except Exception as e:
+        print(f"[tile {tile_idx}] DSM chyba: {e}")
+        vegetation_height = np.zeros_like(dmr_grid_linear)
+
+    # Lesní maska z OSM
+    forest_mask = np.zeros(shape, dtype=np.uint8)
+    if gdf_osm is not None and not gdf_osm.empty:
+        try:
+            tile_box = box(minx, miny, maxx, maxy)
+            gdf_tile_osm = gpd.clip(gdf_osm, tile_box)
+            natural_col = gdf_tile_osm["natural"].fillna("") if "natural" in gdf_tile_osm.columns else ""
+            landuse_col = gdf_tile_osm["landuse"].fillna("") if "landuse" in gdf_tile_osm.columns else ""
+            forest_polys = gdf_tile_osm[(natural_col == "wood") | (landuse_col == "forest")].geometry
+            if not forest_polys.empty:
+                fm_t = rasterize(forest_polys, out_shape=(shape[1], shape[0]),
+                                  transform=transform, fill=0, default_value=1, dtype=np.uint8)
+                forest_mask = np.flipud(fm_t).T
+        except Exception:
+            pass
+
+    b1 = BINS[0]
+    is_clearing = ((vegetation_height < b1) & (vegetation_height >= 0)) & (forest_mask == 1)
+    vegetation_height[is_clearing] = -1
+
+    # Clip maska
+    if clip_polygon is not None:
+        try:
+            cm_t = rasterize([(clip_polygon, 1)], out_shape=(shape[1], shape[0]),
+                              transform=transform, fill=0, default_value=1, dtype=np.uint8)
+            clip_mask = np.flipud(cm_t).T.astype(bool)
+            dmr_grid_linear_viz = np.nan_to_num(dmr_grid_linear, nan=0)
+            dmr_grid_linear_viz[~clip_mask] = 0
+            dmr_grid_cubic_viz = np.nan_to_num(dmr_grid_cubic, nan=0)
+            dmr_grid_cubic_viz[~clip_mask] = np.nan
+        except Exception:
+            dmr_grid_linear_viz = np.nan_to_num(dmr_grid_linear, nan=0)
+            dmr_grid_cubic_viz = np.nan_to_num(dmr_grid_cubic, nan=0)
+    else:
+        dmr_grid_linear_viz = np.nan_to_num(dmr_grid_linear, nan=0)
+        dmr_grid_cubic_viz = np.nan_to_num(dmr_grid_cubic, nan=0)
+
+    del dmr_grid_linear, dmr_grid_cubic
+    gc.collect()
+
+    # Vegetace, skály, vrstevnice, mikrotvary
+    tcb("Klasifikuji vegetaci...")
+    gdf_vegetation = classify_vegetation(vegetation_height, BINS, transform, dmr_path)
+    if gdf_vegetation is not None and not gdf_vegetation.empty:
+        gdf_vegetation = gdf_vegetation.set_crs(CURRENT_CRS, allow_override=True)
+    del vegetation_height
+    gc.collect()
+
+    tcb("Vektorizuji skály...")
+    gdf_rocks = vectorize_rocks(grid_x, grid_y, dmr_grid_linear_viz, transform,
+                                  slope_threshold_deg=SLOPE_THRESHOLD)
+    if gdf_rocks is not None and not gdf_rocks.empty:
+        gdf_rocks = gdf_rocks.set_crs(CURRENT_CRS, allow_override=True)
+
+    tcb("Generuji vrstevnice...")
+    contour_layers = generate_contour_layers(grid_x, grid_y, dmr_grid_cubic_viz,
+                                              clip_polygon=clip_polygon)
+    for k, gdf_c in contour_layers.items():
+        if not gdf_c.empty:
+            contour_layers[k] = gdf_c.set_crs(CURRENT_CRS, allow_override=True)
+
+    tcb("Mikrotvary...")
+    depressions = find_depressions(grid_x, grid_y, dmr_grid_linear_viz,
+                                    pixel_size=FIXED_PIXEL_SIZE, current_crs=CURRENT_CRS)
+    knolls = find_knolls(grid_x, grid_y, dmr_grid_linear_viz,
+                          pixel_size=FIXED_PIXEL_SIZE, current_crs=CURRENT_CRS)
+
+    # Ořez na core bbox (bez překryvu) — aby se prvky neduplikovaly
+    core_box = box(core_x0, core_y0, core_x1, core_y1)
+
+    def clip_to_core(gdf):
+        if gdf is None or gdf.empty:
+            return gdf
+        try:
+            return gpd.clip(gdf, core_box)
+        except Exception:
+            return gdf
+
+    gdf_vegetation = clip_to_core(gdf_vegetation)
+    gdf_rocks = clip_to_core(gdf_rocks)
+    for k in contour_layers:
+        contour_layers[k] = clip_to_core(contour_layers[k])
+    if depressions:
+        dep_gdf = gpd.GeoDataFrame(geometry=depressions, crs=CURRENT_CRS)
+        dep_gdf = clip_to_core(dep_gdf)
+        depressions = list(dep_gdf.geometry) if not dep_gdf.empty else []
+    if knolls:
+        kno_gdf = gpd.GeoDataFrame(geometry=knolls, crs=CURRENT_CRS)
+        kno_gdf = clip_to_core(kno_gdf)
+        knolls = list(kno_gdf.geometry) if not kno_gdf.empty else []
+
+    del dmr_grid_linear_viz, dmr_grid_cubic_viz, grid_x, grid_y
+    gc.collect()
+
+    return {
+        "extent": (core_x0, core_x1, core_y0, core_y1),
+        "full_extent": extent,
+        "gdf_vegetation": gdf_vegetation,
+        "gdf_rocks": gdf_rocks,
+        "contour_layers": contour_layers,
+        "depressions": depressions,
+        "knolls": knolls,
+        "clip_polygon": clip_polygon,
+    }
+
+
+def _merge_tile_results(tile_results):
+    """Sloučí výsledky všech dlaždic do jednoho setu GeoDataFrames."""
+    all_veg, all_rocks = [], []
+    all_contours = {"base": [], "major": [], "minor": []}
+    all_dep, all_kno = [], []
+    all_clips = []
+
+    for tr in tile_results:
+        if tr is None:
+            continue
+        if tr["gdf_vegetation"] is not None and not tr["gdf_vegetation"].empty:
+            all_veg.append(tr["gdf_vegetation"])
+        if tr["gdf_rocks"] is not None and not tr["gdf_rocks"].empty:
+            all_rocks.append(tr["gdf_rocks"])
+        for k in all_contours:
+            gdf_c = tr["contour_layers"].get(k)
+            if gdf_c is not None and not gdf_c.empty:
+                all_contours[k].append(gdf_c)
+        all_dep.extend(tr["depressions"])
+        all_kno.extend(tr["knolls"])
+        if tr["clip_polygon"] is not None:
+            all_clips.append(tr["clip_polygon"])
+
+    import pandas as pd
+    from shapely.ops import unary_union
+
+    def safe_concat(frames):
+        if not frames:
+            return gpd.GeoDataFrame()
+        return gpd.GeoDataFrame(pd.concat(frames, ignore_index=True), crs=frames[0].crs)
+
+    merged_contours = {}
+    for k, frames in all_contours.items():
+        merged_contours[k] = safe_concat(frames)
+
+    clip_union = unary_union(all_clips) if all_clips else None
+
+    return {
+        "gdf_vegetation": safe_concat(all_veg),
+        "gdf_rocks": safe_concat(all_rocks),
+        "contour_layers": merged_contours,
+        "depressions": all_dep,
+        "knolls": all_kno,
+        "clip_polygon": clip_union,
+    }
 
 
 def run_pipeline(job_id: str, params: dict, file_paths: dict,
                  output_dir: str, progress_cb) -> dict:
-    """
-    Spustí celou analýzu synchronně.
-
-    params: viz JobParams v routes/jobs.py
-    file_paths: { dtm, dsm, zabaged: [...], isom: [...] }
-    output_dir: složka pro výstupy tohoto jobu
-    progress_cb(pct: int, msg: str): callback průběhu
-
-    Vrací: { png_path, gpkg_path, world_file_path }
-    """
     start = time.time()
 
     def cb(pct, msg):
@@ -58,15 +299,17 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
         "vegetation": True, "roads": True, "buildings": True,
         "man_made": True, "magnetic_lines": False,
     })
-    FIXED_PIXEL_SIZE = 0.5
 
-    # Načti symbols.xml — hledáme vedle tohoto souboru nebo v CWD
+    tile_params = {
+        "crs": CURRENT_CRS, "sigma": SIGMA,
+        "slope_threshold": SLOPE_THRESHOLD, "bins": BINS,
+    }
+
+    # Symbols
     sym_xml = f"symbols{10 if SCALE == 10000 else 15}.xml"
-    for candidate in [
-        sym_xml,
-        os.path.join(os.path.dirname(__file__), "..", "..", sym_xml),
-        os.path.join(os.path.dirname(__file__), sym_xml),
-    ]:
+    for candidate in [sym_xml,
+                       os.path.join(os.path.dirname(__file__), "..", "..", sym_xml),
+                       os.path.join(os.path.dirname(__file__), sym_xml)]:
         if os.path.exists(candidate):
             sym_xml = candidate
             break
@@ -75,61 +318,53 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
     dmr_path = file_paths["dtm"]
     dmp_path = file_paths["dsm"]
 
-    # --- DTM ---
-    cb(5, "Načítám DTM (bodové mračno)...")
-    dmr_grid_cubic, grid_x, grid_y, extent, dmr_points, dmr_z = load_dmr_grid(
-        dmr_path, CURRENT_CRS,
-        pixel_size=FIXED_PIXEL_SIZE,
-        sigma_smooth=SIGMA,
-        progress_cb=lambda msg: cb(7, msg),
-    )
-    minx, maxx, miny, maxy = extent
+    # Zjisti rozsah dat z LAZ hlavičky
+    cb(3, "Zjišťuji rozsah dat...")
+    import laspy
+    with laspy.open(dmr_path) as fh:
+        hdr = fh.header
+        try:
+            src_crs = hdr.parse_crs() or CRS.from_epsg(5514)
+        except Exception:
+            src_crs = CRS.from_epsg(5514)
+        raw_minx, raw_maxx = float(hdr.x_min), float(hdr.x_max)
+        raw_miny, raw_maxy = float(hdr.y_min), float(hdr.y_max)
 
-    # Clip polygon z DTM
-    cb(10, "Vytvářím ořezovou masku...")
-    clip_polygon = make_clip_polygon(dmr_points)
+    try:
+        dst_crs = CRS.from_string(CURRENT_CRS)
+        if src_crs != dst_crs:
+            t = Transformer.from_crs(src_crs, dst_crs, always_xy=True)
+            xs, ys = t.transform([raw_minx, raw_maxx], [raw_miny, raw_maxy])
+            global_minx, global_maxx = min(xs), max(xs)
+            global_miny, global_maxy = min(ys), max(ys)
+        else:
+            global_minx, global_maxx = raw_minx, raw_maxx
+            global_miny, global_maxy = raw_miny, raw_maxy
+    except Exception:
+        global_minx, global_maxx = raw_minx, raw_maxx
+        global_miny, global_maxy = raw_miny, raw_maxy
 
-    # Lineární interpolace DTM pro vizualizaci terénních prvků
-    cb(12, "Interpoluji DTM (linear)...")
-    from scipy.interpolate import griddata
-    shift_x = np.mean(dmr_points[:, 0])
-    shift_y = np.mean(dmr_points[:, 1])
-    pts_sh = dmr_points - np.array([shift_x, shift_y])
-    gx_sh = grid_x - shift_x
-    gy_sh = grid_y - shift_y
-    dmr_grid_linear = griddata(pts_sh, dmr_z, (gx_sh, gy_sh), method="linear")
-    if np.isnan(dmr_grid_linear).all():
-        dmr_grid_linear = griddata(pts_sh, dmr_z, (gx_sh, gy_sh), method="nearest")
+    area_km2 = ((global_maxx - global_minx) / 1000) * ((global_maxy - global_miny) / 1000)
+    cb(4, f"Oblast: {(global_maxx-global_minx)/1000:.1f} × {(global_maxy-global_miny)/1000:.1f} km (~{area_km2:.1f} km²)")
 
-    # --- DSM ---
-    cb(15, "Načítám DSM...")
-    dmp_grid = load_dmp_grid(
-        dmp_path, grid_x, grid_y, extent, CURRENT_CRS,
-        progress_cb=lambda msg: cb(18, msg),
-    )
+    # Výpočet dlaždic
+    tiles = _compute_tiles(global_minx, global_maxx, global_miny, global_maxy,
+                            TILE_SIZE_M, OVERLAP_M)
+    n_tiles = len(tiles)
+    cb(5, f"Zpracuji {n_tiles} dlaždic ({TILE_SIZE_M}×{TILE_SIZE_M}m)...")
 
-    # Výška vegetace
-    cb(22, "Počítám výšku vegetace...")
-    vegetation_height = np.clip(dmp_grid - dmr_grid_linear, 0, None)
-
-    # Rasterio transform
-    shape = grid_x.shape
-    transform = rasterio.transform.from_bounds(
-        minx, miny, maxx, maxy, width=shape[0], height=shape[1]
-    )
-
-    # OSM lesní maska
-    cb(25, "Stahuji OSM data...")
+    # OSM stáhnout jednou pro celou oblast
+    cb(6, "Stahuji OSM data...")
     gdf_osm = None
     try:
         ox.settings.use_cache = True
         ox.settings.cache_folder = os.path.join(tempfile.gettempdir(), "OMapMaker_OSM")
         ox.settings.user_agent = "OMapMaker-Web-v7"
         ox.settings.timeout = 300
-        download_buffer = 300
         to_wgs = Transformer.from_crs(CURRENT_CRS, "EPSG:4326", always_xy=True)
-        mn_lon, mn_lat = to_wgs.transform(minx - download_buffer, miny - download_buffer)
-        mx_lon, mx_lat = to_wgs.transform(maxx + download_buffer, maxy + download_buffer)
+        buf = 300
+        mn_lon, mn_lat = to_wgs.transform(global_minx - buf, global_miny - buf)
+        mx_lon, mx_lat = to_wgs.transform(global_maxx + buf, global_maxy + buf)
         tags = {
             "highway": True, "building": True, "waterway": True, "natural": True,
             "landuse": True, "leisure": True, "railway": True, "power": True,
@@ -141,104 +376,14 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
         }
         gdf_osm = ox.features_from_bbox((mn_lon, mn_lat, mx_lon, mx_lat), tags=tags)
         gdf_osm = gdf_osm.to_crs(CURRENT_CRS)
-        if clip_polygon is not None:
-            try:
-                gdf_osm = gpd.clip(gdf_osm, clip_polygon)
-            except Exception:
-                pass
-        cb(35, f"OSM staženo: {len(gdf_osm)} prvků")
+        cb(8, f"OSM staženo: {len(gdf_osm)} prvků")
     except Exception as e:
-        cb(35, f"Varování OSM: {e}")
-
-    # Lesní maska
-    forest_mask = np.zeros(shape, dtype=np.uint8)
-    if gdf_osm is not None and not gdf_osm.empty:
-        try:
-            from .processor import _get_col_safe
-        except ImportError:
-            def _get_col_safe(df, col):
-                return df[col].fillna("") if col in df.columns else ""
-        try:
-            natural_col = gdf_osm["natural"].fillna("") if "natural" in gdf_osm.columns else ""
-            landuse_col = gdf_osm["landuse"].fillna("") if "landuse" in gdf_osm.columns else ""
-            forest_polys = gdf_osm[
-                (natural_col == "wood") | (landuse_col == "forest")
-            ].geometry
-            if not forest_polys.empty:
-                fm_t = rasterize(forest_polys, out_shape=(shape[1], shape[0]),
-                                 transform=transform, fill=0, default_value=1, dtype=np.uint8)
-                forest_mask = np.flipud(fm_t).T
-        except Exception as e:
-            print(f"[pipeline] Lesní maska: {e}")
-
-    # Označení pasek
-    b1 = BINS[0]
-    is_clearing = ((vegetation_height < b1) & (vegetation_height >= 0)) & (forest_mask == 1)
-    vegetation_height[is_clearing] = -1
-
-    # Clip maska pro rastry
-    cb(38, "Aplikuji ořezovou masku...")
-    if clip_polygon is not None:
-        try:
-            cm_t = rasterize([(clip_polygon, 1)], out_shape=(shape[1], shape[0]),
-                             transform=transform, fill=0, default_value=1, dtype=np.uint8)
-            clip_mask_grid = np.flipud(cm_t).T.astype(bool)
-            dmr_grid_linear_viz = np.nan_to_num(dmr_grid_linear, nan=0)
-            dmr_grid_linear_viz[~clip_mask_grid] = 0
-            dmr_grid_cubic_viz = np.nan_to_num(dmr_grid_cubic, nan=0)
-            dmr_grid_cubic_viz[~clip_mask_grid] = np.nan
-        except Exception as e:
-            print(f"[pipeline] Clip maska: {e}")
-            dmr_grid_linear_viz = np.nan_to_num(dmr_grid_linear, nan=0)
-            dmr_grid_cubic_viz = np.nan_to_num(dmr_grid_cubic, nan=0)
-    else:
-        dmr_grid_linear_viz = np.nan_to_num(dmr_grid_linear, nan=0)
-        dmr_grid_cubic_viz = np.nan_to_num(dmr_grid_cubic, nan=0)
-
-    # Vegetace
-    cb(42, "Klasifikuji vegetaci...")
-    gdf_vegetation = classify_vegetation(
-        vegetation_height, BINS, transform, dmr_path,
-        progress_cb=lambda msg: cb(48, msg),
-    )
-    if gdf_vegetation is not None and not gdf_vegetation.empty:
-        gdf_vegetation = gdf_vegetation.set_crs(CURRENT_CRS, allow_override=True)
-
-    cb(52, "Vektorizuji skály...")
-    gdf_rocks = vectorize_rocks(
-        grid_x, grid_y, dmr_grid_linear_viz, transform,
-        slope_threshold_deg=SLOPE_THRESHOLD,
-        progress_cb=lambda msg: cb(55, msg),
-    )
-    if gdf_rocks is not None and not gdf_rocks.empty:
-        gdf_rocks = gdf_rocks.set_crs(CURRENT_CRS, allow_override=True)
-
-    cb(58, "Generuji vrstevnice...")
-    contour_layers = generate_contour_layers(
-        grid_x, grid_y, dmr_grid_cubic_viz,
-        clip_polygon=clip_polygon,
-        progress_cb=lambda msg: cb(62, msg),
-    )
-    for k, gdf_c in contour_layers.items():
-        if not gdf_c.empty:
-            contour_layers[k] = gdf_c.set_crs(CURRENT_CRS, allow_override=True)
-
-    cb(65, "Hledám terénní mikrotvary...")
-    depressions = find_depressions(
-        grid_x, grid_y, dmr_grid_linear_viz,
-        pixel_size=FIXED_PIXEL_SIZE, current_crs=CURRENT_CRS,
-        progress_cb=lambda msg: cb(67, msg),
-    )
-    knolls = find_knolls(
-        grid_x, grid_y, dmr_grid_linear_viz,
-        pixel_size=FIXED_PIXEL_SIZE, current_crs=CURRENT_CRS,
-        progress_cb=lambda msg: cb(69, msg),
-    )
+        cb(8, f"Varování OSM: {e}")
 
     # ZABAGED
-    cb(70, "Načítám ZABAGED® soubory...")
+    cb(9, "Načítám ZABAGED® soubory...")
     zabaged_gdfs = {}
-    target_bbox = box(minx, miny, maxx, maxy)
+    target_bbox_geom = box(global_minx, global_miny, global_maxx, global_maxy)
     for path in file_paths.get("zabaged", []):
         fname = os.path.basename(path)
         try:
@@ -249,22 +394,19 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
                 crs_dst = CRS.from_user_input(CURRENT_CRS)
                 if file_crs != crs_dst:
                     t2 = Transformer.from_crs(crs_dst, file_crs, always_xy=True)
-                    b = target_bbox.bounds
+                    b = target_bbox_geom.bounds
                     tx, ty = t2.transform([b[0], b[2]], [b[1], b[3]])
                     file_bbox = (min(tx), min(ty), max(tx), max(ty))
                 else:
-                    file_bbox = target_bbox.bounds
+                    file_bbox = target_bbox_geom.bounds
             except Exception:
                 pass
             gdf_z = gpd.read_file(path, bbox=file_bbox) if file_bbox else gpd.read_file(path)
             if not gdf_z.empty:
                 gdf_z = gdf_z.to_crs(CURRENT_CRS)
-                if clip_polygon:
-                    gdf_z = gpd.clip(gdf_z, clip_polygon)
             zabaged_gdfs[fname.rsplit(".", 1)[0]] = gdf_z
-            cb(70, f"ZABAGED načteno: {fname}")
         except Exception as e:
-            print(f"[pipeline] Chyba ZABAGED {fname}: {e}")
+            print(f"[pipeline] ZABAGED {fname}: {e}")
 
     # ISOM
     isom_gdfs = {}
@@ -273,35 +415,49 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
         try:
             gdf_i = gpd.read_file(path)
             if not gdf_i.empty:
-                if gdf_i.crs is None:
-                    gdf_i = gdf_i.set_crs(CURRENT_CRS)
-                else:
-                    gdf_i = gdf_i.to_crs(CURRENT_CRS)
-                if clip_polygon:
-                    gdf_i = gpd.clip(gdf_i, clip_polygon)
-            key = fname.rsplit(".", 1)[0]
-            isom_gdfs[key] = gdf_i
+                gdf_i = gdf_i.set_crs(CURRENT_CRS) if gdf_i.crs is None else gdf_i.to_crs(CURRENT_CRS)
+            isom_gdfs[fname.rsplit(".", 1)[0]] = gdf_i
             isom_gdfs[fname] = gdf_i
         except Exception as e:
-            print(f"[pipeline] Chyba ISOM {fname}: {e}")
+            print(f"[pipeline] ISOM {fname}: {e}")
+
+    # Zpracování dlaždic
+    tile_results = []
+    for i, tile_bbox in enumerate(tiles):
+        result = _process_tile(
+            tile_bbox, dmr_path, dmp_path, tile_params, sym_library,
+            gdf_osm, zabaged_gdfs, isom_gdfs,
+            i, n_tiles, cb,
+        )
+        tile_results.append(result)
+        gc.collect()
+
+    # Sloučení výsledků
+    cb(80, "Slučuji výsledky dlaždic...")
+    merged = _merge_tile_results(tile_results)
+    del tile_results
+    gc.collect()
+
+    global_extent = (global_minx, global_maxx, global_miny, global_maxy)
 
     # Render
-    cb(75, "Sestavuji mapu...")
+    cb(85, "Sestavuji mapu...")
+    from .renderer import render_map
     output_png = os.path.join(output_dir, f"{job_id}_OMap.png")
     render_result = render_map(
-        grid_x=grid_x, grid_y=grid_y,
-        dmr_grid_cubic=dmr_grid_cubic_viz,
-        dmr_grid_linear=dmr_grid_linear_viz,
-        gdf_vegetation=gdf_vegetation,
-        gdf_rocks=gdf_rocks,
-        contour_layers=contour_layers,
-        depressions=depressions,
-        knolls=knolls,
+        grid_x=None, grid_y=None,
+        dmr_grid_cubic=None,
+        dmr_grid_linear=None,
+        gdf_vegetation=merged["gdf_vegetation"],
+        gdf_rocks=merged["gdf_rocks"],
+        contour_layers=merged["contour_layers"],
+        depressions=merged["depressions"],
+        knolls=merged["knolls"],
         gdf_osm=gdf_osm,
         zabaged_gdfs=zabaged_gdfs,
         isom_gdfs=isom_gdfs,
-        extent=extent,
-        clip_polygon=clip_polygon,
+        extent=global_extent,
+        clip_polygon=merged["clip_polygon"],
         sym_library=sym_library,
         current_crs=CURRENT_CRS,
         scale=SCALE,
@@ -309,40 +465,38 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
         north_rotation=NORTH_ROTATION,
         layer_visibility=LAYER_VISIBILITY,
         output_png_path=output_png,
-        progress_cb=lambda msg: cb(88, msg),
+        progress_cb=lambda msg: cb(90, msg),
     )
 
-    # GPKG export
+    # GPKG
     gpkg_path = None
     cb(95, "Exportuji GPKG...")
     try:
         gpkg_path = os.path.join(output_dir, f"{job_id}_OOM.gpkg")
-        # Sbírání vrstev pro export
-        from .exporter import OomCollector
         collector = OomCollector(current_crs=CURRENT_CRS)
         for sym_key, gdf_c in [
-            ("sym101", contour_layers.get("base")),
-            ("sym102", contour_layers.get("major")),
-            ("sym103", contour_layers.get("minor")),
-            ("sym201", gdf_rocks),
-            ("sym405", gdf_vegetation[gdf_vegetation["class_name"] == "Les"] if gdf_vegetation is not None and not gdf_vegetation.empty else None),
+            ("sym101", merged["contour_layers"].get("base")),
+            ("sym102", merged["contour_layers"].get("major")),
+            ("sym103", merged["contour_layers"].get("minor")),
+            ("sym201", merged["gdf_rocks"]),
         ]:
             if gdf_c is not None and not gdf_c.empty:
                 collector.collect(sym_key, gdf_c)
-        if depressions:
-            import geopandas as gpd2
-            collector.collect("sym111", gpd2.GeoDataFrame(geometry=depressions, crs=CURRENT_CRS))
-        if knolls:
-            import geopandas as gpd2
-            collector.collect("sym109", gpd2.GeoDataFrame(geometry=knolls, crs=CURRENT_CRS))
+        veg = merged["gdf_vegetation"]
+        if veg is not None and not veg.empty and "class_name" in veg.columns:
+            collector.collect("sym405", veg[veg["class_name"] == "Les"])
+        if merged["depressions"]:
+            collector.collect("sym111", gpd.GeoDataFrame(geometry=merged["depressions"], crs=CURRENT_CRS))
+        if merged["knolls"]:
+            collector.collect("sym109", gpd.GeoDataFrame(geometry=merged["knolls"], crs=CURRENT_CRS))
         collector.export(gpkg_path)
     except Exception as e:
-        print(f"[pipeline] GPKG export chyba: {e}")
+        print(f"[pipeline] GPKG chyba: {e}")
         gpkg_path = None
 
     elapsed = time.time() - start
     mins, secs = divmod(int(elapsed), 60)
-    cb(100, f"Hotovo! Čas: {mins} min {secs} s")
+    cb(100, f"Hotovo! Čas: {mins} min {secs} s · {n_tiles} dlaždic")
 
     return {
         "png_path": render_result["png_path"],

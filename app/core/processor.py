@@ -29,9 +29,11 @@ from pyproj import CRS, Transformer
 
 def load_dmr_grid(dmr_path: str, target_crs_code: str,
                   pixel_size: float = 0.5, sigma_smooth: float = 6.5,
+                  bbox_clip: tuple | None = None,
                   progress_cb=None) -> tuple:
     """
     Načte bodové mračno DTM (.las/.laz), interpoluje na pravidelnou mřížku.
+    bbox_clip: (minx, maxx, miny, maxy) pro ořez na dlaždici
     Vrací: (dmr_grid_cubic, grid_x, grid_y, extent, points, z)
     """
     def _cb(msg):
@@ -77,6 +79,13 @@ def load_dmr_grid(dmr_path: str, target_crs_code: str,
                 continue
             if transformer:
                 cx, cy = transformer.transform(cx, cy)
+            # Ořez na bbox dlaždice
+            if bbox_clip is not None:
+                bx0, bx1, by0, by1 = bbox_clip
+                m = (cx >= bx0) & (cx <= bx1) & (cy >= by0) & (cy <= by1)
+                cx, cy, cz = cx[m], cy[m], cz[m]
+            if len(cx) == 0:
+                continue
             xs.append(cx)
             ys.append(cy)
             zs.append(cz)
