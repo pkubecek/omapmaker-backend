@@ -511,7 +511,8 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
         # OSM vrstvy — voda, cesty, budovy, umělé prvky
         if gdf_osm is not None and not gdf_osm.empty:
             def col(c):
-                return gdf_osm[c].fillna("") if c in gdf_osm.columns else gpd.pd.Series(
+                import pandas as pd
+                return gdf_osm[c].fillna("") if c in gdf_osm.columns else pd.Series(
                     [""] * len(gdf_osm), index=gdf_osm.index)
 
             gdf_lines = gdf_osm[gdf_osm.geometry.geom_type.isin(
@@ -530,6 +531,8 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
                 col("waterway").isin(["stream", "ditch"])])
             collector.collect("sym307", gdf_polys[col("wetland") == "reedbed"])
             collector.collect("sym308", gdf_polys[col("natural") == "wetland"])
+            collector.collect("sym312", gdf_pts[col("natural") == "spring"])
+            collector.collect("sym312", gdf_polys[col("natural") == "spring"])
 
             # Cesty
             collector.collect("sym502Da", gdf_lines[col("highway").isin(["motorway", "trunk"])])
@@ -547,6 +550,23 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
                 col("building").notna() & (col("building") != "")])
             collector.collect("sym510", gdf_lines[col("power").isin(["line", "minor_line"])])
             collector.collect("sym513-1a", gdf_lines[col("barrier") == "wall"])
+
+            # Bodové prvky
+            gdf_centroids = gdf_osm.copy()
+            gdf_centroids["geometry"] = gdf_osm.geometry.centroid
+
+            collector.collect("sym312", gdf_centroids[
+                (col("natural") == "spring") & (col("covered") != "yes")])
+            collector.collect("sym417a", gdf_centroids[col("natural") == "tree"])
+            collector.collect("sym417b", gdf_centroids[col("natural") == "tree"])
+            collector.collect("sym205", gdf_centroids[
+                col("natural").isin(["stone", "rock"])])
+            collector.collect("sym524a", gdf_centroids[
+                col("man_made").isin(["tower", "chimney", "water_tower",
+                                       "communications_tower", "mast"])])
+            collector.collect("sym526a", gdf_centroids[
+                col("historic").isin(["memorial", "boundary_stone", "wayside_cross"])])
+            collector.collect("sym311", gdf_centroids[col("natural") == "sinkhole"])
 
         # ZABAGED vrstvy
         for zab_key, gdf_z in zabaged_gdfs.items():
