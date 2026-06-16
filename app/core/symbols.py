@@ -92,7 +92,8 @@ class SymbolLibrary:
                             )
                             path_obj.vertices -= center
                             path_obj.vertices[:, 1] *= -1
-                        except Exception:
+                        except Exception as e:
+                            print(f"[symbols] Path parse chyba {sid}: {e}")
                             path_obj = None
 
                 self._lib[sid] = {
@@ -136,18 +137,18 @@ def plot_symbol(ax, sym_key: str, gdf: gpd.GeoDataFrame,
     if "solid_capstyle" in sym_props:
         sym_props["capstyle"] = sym_props.pop("solid_capstyle")
 
-    # Bodové symboly (SVG path)
+    # Bodové symboly (SVG path) — souřadnice v XML jsou přímo v mapových metrech
     if sym_type == "point" and sym_path is not None:
         _strip_custom_keys(sym_props)
         for geom in gdf.geometry:
-            pts = []
+            pts_list = []
             if geom is None or geom.is_empty:
                 continue
             if geom.geom_type == "Point":
-                pts.append((geom.x, geom.y))
+                pts_list.append((geom.x, geom.y))
             elif geom.geom_type == "MultiPoint":
-                pts.extend([(p.x, p.y) for p in geom.geoms])
-            for x, y in pts:
+                pts_list.extend([(p.x, p.y) for p in geom.geoms])
+            for x, y in pts_list:
                 t = Affine2D().translate(x, y) + ax.transData
                 patch = PathPatch(sym_path, transform=t, zorder=zorder, **sym_props)
                 ax.add_patch(patch)
