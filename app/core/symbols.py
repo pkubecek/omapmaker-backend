@@ -85,14 +85,17 @@ class SymbolLibrary:
                     if path_d:
                         try:
                             path_obj = parse_path(path_d)
+                            # Vycentruj symbol kolem 0,0
                             ext = path_obj.get_extents()
-                            center = (
-                                (ext.xmin + ext.xmax) / 2,
-                                (ext.ymin + ext.ymax) / 2,
-                            )
-                            path_obj.vertices -= center
+                            center_x = (ext.xmin + ext.xmax) / 2
+                            center_y = (ext.ymin + ext.ymax) / 2
+                            path_obj.vertices[:, 0] -= center_x
+                            path_obj.vertices[:, 1] -= center_y
+                            # SVG má Y dolů, matplotlib má Y nahoru
+                            # Invertujeme Y ale zachováme sweep flags pro arc
                             path_obj.vertices[:, 1] *= -1
-                        except Exception:
+                        except Exception as e:
+                            print(f"[symbols] Path parse chyba {sid}: {e}")
                             path_obj = None
 
                 self._lib[sid] = {
@@ -139,6 +142,29 @@ def plot_symbol(ax, sym_key: str, gdf: gpd.GeoDataFrame,
     # Bodové symboly (SVG path)
     if sym_type == "point" and sym_path is not None:
         _strip_custom_keys(sym_props)
+        # SVG souřadnice jsou v pt (body), potřebujeme převést na display units
+        # Používáme ax.transData + scale faktor přes display transformation
+        try:
+            # Zjisti scale: 1 pt v SVG = kolik pixelů v display space
+            # Pro mapu 1:10000 při 300 DPI: 1pt = 0.353mm = 3.53m v mapě
+            # Ale jednodušší: použijeme Affine2D se scale
+            # Symboly v XML jsou v mm * scale_factor
+            # scale=1 znamená surové SVG jednotky jako display pts
+            import matplotlib.transforms as mtransforms
+            fig = ax.get_figure()
+            dpi = fig.dpi
+            # 1 pt = 1/72 inch = dpi/72 pixels
+            pt_to_display = dpi / 72.0
+            display_to_data = ax.transData.inverted()
+            origin_display = ax.transData.transform([0, 0])
+            one_pt_display = origin_display + np.array([pt_to_display, pt_to_display])
+            one_pt_data = display_to_data.transform(one_pt_display) - display_to_data.transform(origin_display)
+            sx = abs(one_pt_data[0])
+            sy = abs(one_pt_data[1])
+        except Exception:
+            sx, sy = 1.0, 1.0
+
+        import copy
         for geom in gdf.geometry:
             pts = []
             if geom is None or geom.is_empty:
@@ -148,8 +174,11 @@ def plot_symbol(ax, sym_key: str, gdf: gpd.GeoDataFrame,
             elif geom.geom_type == "MultiPoint":
                 pts.extend([(p.x, p.y) for p in geom.geoms])
             for x, y in pts:
-                t = Affine2D().translate(x, y) + ax.transData
-                patch = PathPatch(sym_path, transform=t, zorder=zorder, **sym_props)
+                scaled_path = copy.deepcopy(sym_path)
+                scaled_path.vertices[:, 0] = scaled_path.vertices[:, 0] * sx + x
+                scaled_path.vertices[:, 1] = scaled_path.vertices[:, 1] * sy + y
+                patch = PathPatch(scaled_path, transform=ax.transData,
+                                  zorder=zorder, **sym_props)
                 ax.add_patch(patch)
         return
 
