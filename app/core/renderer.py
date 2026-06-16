@@ -193,6 +193,37 @@ def add_magnetic_north_lines(ax, extent, scale, rotation=0.0, spacing_mm=30,
 # Main render function
 # ---------------------------------------------------------------------------
 
+def _plot_symbol_rotated(ax, sym_key, gdf, zorder, sym_library, current_crs, rotate_deg=0):
+    """Vykreslí bodový symbol s rotací — používá se pro prohlubně (180°)."""
+    from .symbols import _strip_custom_keys
+    from matplotlib.patches import PathPatch
+    from matplotlib.transforms import Affine2D
+
+    sym_data = sym_library.get(sym_key) if sym_library else None
+    if sym_data is None or sym_data.get("type") != "point" or sym_data.get("path") is None:
+        plot_symbol(ax, sym_key, gdf, zorder, sym_library, current_crs)
+        return
+
+    sym_path = sym_data["path"]
+    sym_props = sym_data["props"].copy()
+    _strip_custom_keys(sym_props)
+    if "solid_capstyle" in sym_props:
+        sym_props["capstyle"] = sym_props.pop("solid_capstyle")
+
+    for geom in gdf.geometry:
+        if geom is None or geom.is_empty:
+            continue
+        pts = []
+        if geom.geom_type == "Point":
+            pts.append((geom.x, geom.y))
+        elif geom.geom_type == "MultiPoint":
+            pts.extend([(p.x, p.y) for p in geom.geoms])
+        for x, y in pts:
+            t = Affine2D().rotate_deg(rotate_deg).translate(x, y) + ax.transData
+            patch = PathPatch(sym_path, transform=t, zorder=zorder, **sym_props)
+            ax.add_patch(patch)
+
+
 def render_map(
     *,
     grid_x, grid_y,
@@ -307,7 +338,8 @@ def render_map(
         if depressions:
             _cb("Kreslím prohlubně...")
             dep_gdf = gpd.GeoDataFrame(geometry=depressions, crs=current_crs)
-            plot_symbol(ax, "sym111", dep_gdf, 21, sym_library, current_crs)
+            # Prohlubně (sym111) se kreslí otočené o 180° — stejně jako v originálu
+            _plot_symbol_rotated(ax, "sym111", dep_gdf, 21, sym_library, current_crs, rotate_deg=180)
         if knolls:
             _cb("Kreslím kupky...")
             kno_gdf = gpd.GeoDataFrame(geometry=knolls, crs=current_crs)
@@ -331,10 +363,10 @@ def render_map(
         )
 
     # Uložení PNG
-    _cb("Ukládám PNG (500 DPI)...")
+    _cb("Ukládám PNG (1000 DPI)...")
     plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
     transparent = paper_format == "Data Extent"
-    plt.savefig(output_png_path, dpi=500, bbox_inches="tight",
+    plt.savefig(output_png_path, dpi=1000, bbox_inches="tight",
                 pad_inches=0, transparent=transparent)
     plt.close(fig)
 
