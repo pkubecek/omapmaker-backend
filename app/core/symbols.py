@@ -85,15 +85,14 @@ class SymbolLibrary:
                     if path_d:
                         try:
                             path_obj = parse_path(path_d)
-                            # Vycentruj symbol kolem 0,0
                             ext = path_obj.get_extents()
-                            center_x = (ext.xmin + ext.xmax) / 2
-                            center_y = (ext.ymin + ext.ymax) / 2
-                            path_obj.vertices[:, 0] -= center_x
-                            path_obj.vertices[:, 1] -= center_y
-                            # Y inverzi NEDĚLÁME zde - dělá ji Affine2D při vykreslení
-                        except Exception as e:
-                            print(f"[symbols] Path parse chyba {sid}: {e}")
+                            center = (
+                                (ext.xmin + ext.xmax) / 2,
+                                (ext.ymin + ext.ymax) / 2,
+                            )
+                            path_obj.vertices -= center
+                            path_obj.vertices[:, 1] *= -1
+                        except Exception:
                             path_obj = None
 
                 self._lib[sid] = {
@@ -140,24 +139,16 @@ def plot_symbol(ax, sym_key: str, gdf: gpd.GeoDataFrame,
     # Bodové symboly (SVG path)
     if sym_type == "point" and sym_path is not None:
         _strip_custom_keys(sym_props)
-        # Symboly v XML jsou v mm na papíře při měřítku 1:10000
-        # 1 mm na papíře = 10 m v terénu (při 1:10000)
-        # Převod: pt (SVG) → mm → metry v mapě
-        # 1 pt = 0.3528 mm, 1 mm papíru = 10 m terénu (1:10000)
-        # Ale SVG souřadnice jsou v "mapových bodech" kde ~1 jednotka = 0.1 mm papíru
-        # Empiricky: factor ~0.35 mm/pt * 10 m/mm = 3.5 m/pt
-        PT_TO_M = 0.3528 * 10.0  # ~3.528 m za 1 SVG jednotku
-
         for geom in gdf.geometry:
-            pts_list = []
+            pts = []
             if geom is None or geom.is_empty:
                 continue
             if geom.geom_type == "Point":
-                pts_list.append((geom.x, geom.y))
+                pts.append((geom.x, geom.y))
             elif geom.geom_type == "MultiPoint":
-                pts_list.extend([(p.x, p.y) for p in geom.geoms])
-            for x, y in pts_list:
-                t = Affine2D().scale(PT_TO_M, -PT_TO_M).translate(x, y) + ax.transData
+                pts.extend([(p.x, p.y) for p in geom.geoms])
+            for x, y in pts:
+                t = Affine2D().translate(x, y) + ax.transData
                 patch = PathPatch(sym_path, transform=t, zorder=zorder, **sym_props)
                 ax.add_patch(patch)
         return
