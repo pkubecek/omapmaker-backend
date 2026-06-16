@@ -474,23 +474,114 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
     try:
         gpkg_path = os.path.join(output_dir, f"{job_id}_OOM.gpkg")
         collector = OomCollector(current_crs=CURRENT_CRS)
-        for sym_key, gdf_c in [
-            ("sym101", merged["contour_layers"].get("base")),
-            ("sym102", merged["contour_layers"].get("major")),
-            ("sym103", merged["contour_layers"].get("minor")),
-            ("sym201", merged["gdf_rocks"]),
+
+        # Vrstevnice
+        for sym_key, layer_key in [
+            ("sym101", "base"), ("sym102", "major"), ("sym103", "minor")
         ]:
+            gdf_c = merged["contour_layers"].get(layer_key)
             if gdf_c is not None and not gdf_c.empty:
                 collector.collect(sym_key, gdf_c)
+
+        # Skály
+        if merged["gdf_rocks"] is not None and not merged["gdf_rocks"].empty:
+            collector.collect("sym201", merged["gdf_rocks"])
+
+        # Mikrotvary
+        if merged["depressions"]:
+            collector.collect("sym111", gpd.GeoDataFrame(
+                geometry=merged["depressions"], crs=CURRENT_CRS))
+        if merged["knolls"]:
+            collector.collect("sym109", gpd.GeoDataFrame(
+                geometry=merged["knolls"], crs=CURRENT_CRS))
+
+        # Vegetace — všechny třídy
+        VEG_SYM = {
+            "Paseka": "sym403", "Louka": "sym401",
+            "Les": "sym405", "Vysoky_porost": "sym406",
+            "Stredni_porost": "sym408", "Nizky_porost": "sym410",
+        }
         veg = merged["gdf_vegetation"]
         if veg is not None and not veg.empty and "class_name" in veg.columns:
-            collector.collect("sym405", veg[veg["class_name"] == "Les"])
-        if merged["depressions"]:
-            collector.collect("sym111", gpd.GeoDataFrame(geometry=merged["depressions"], crs=CURRENT_CRS))
-        if merged["knolls"]:
-            collector.collect("sym109", gpd.GeoDataFrame(geometry=merged["knolls"], crs=CURRENT_CRS))
+            for class_name, sym_key in VEG_SYM.items():
+                subset = veg[veg["class_name"] == class_name]
+                if not subset.empty:
+                    collector.collect(sym_key, subset)
+
+        # OSM vrstvy — voda, cesty, budovy, umělé prvky
+        if gdf_osm is not None and not gdf_osm.empty:
+            def col(c):
+                return gdf_osm[c].fillna("") if c in gdf_osm.columns else gpd.pd.Series(
+                    [""] * len(gdf_osm), index=gdf_osm.index)
+
+            gdf_lines = gdf_osm[gdf_osm.geometry.geom_type.isin(
+                ["LineString", "MultiLineString"])].copy()
+            gdf_polys = gdf_osm[gdf_osm.geometry.geom_type.isin(
+                ["Polygon", "MultiPolygon"])].copy()
+            gdf_pts = gdf_osm[gdf_osm.geometry.geom_type == "Point"].copy()
+
+            # Voda
+            collector.collect("sym301", gdf_polys[
+                col("natural").isin(["lake", "water"]) |
+                col("water").isin(["lake", "river", "reservoir"])])
+            collector.collect("sym304", gdf_lines[
+                col("waterway").isin(["river", "canal"])])
+            collector.collect("sym305", gdf_lines[
+                col("waterway").isin(["stream", "ditch"])])
+            collector.collect("sym307", gdf_polys[col("wetland") == "reedbed"])
+            collector.collect("sym308", gdf_polys[col("natural") == "wetland"])
+
+            # Cesty
+            collector.collect("sym502Da", gdf_lines[col("highway").isin(["motorway", "trunk"])])
+            collector.collect("sym502a", gdf_lines[
+                col("highway").isin(["primary", "secondary", "residential", "tertiary"])])
+            collector.collect("sym503", gdf_lines[col("highway").isin(["service"])])
+            collector.collect("sym504", gdf_lines[col("highway").isin(["track", "unclassified"])])
+            collector.collect("sym505", gdf_lines[
+                col("highway").isin(["footway", "pedestrian", "bridleway"])])
+            collector.collect("sym506", gdf_lines[col("highway") == "path"])
+            collector.collect("sym509a", gdf_lines[col("railway").isin(["rail", "narrow_gauge"])])
+
+            # Budovy a umělé prvky
+            collector.collect("sym521", gdf_polys[
+                col("building").notna() & (col("building") != "")])
+            collector.collect("sym510", gdf_lines[col("power").isin(["line", "minor_line"])])
+            collector.collect("sym513-1a", gdf_lines[col("barrier") == "wall"])
+
+        # ZABAGED vrstvy
+        for zab_key, gdf_z in zabaged_gdfs.items():
+            if gdf_z is None or gdf_z.empty:
+                continue
+            # Mapování názvů ZABAGED souborů na ISOM symboly
+            ZAB_MAP = {
+                "SilniceDalnice": "sym502Da", "Cesta": "sym504",
+                "Pesina": "sym506", "ZeleznicniTrat": "sym509a",
+                "VodniTok": "sym305", "VodniPlocha": "sym301",
+                "BudovaJednotlivaNeboBlokBudov": "sym521",
+                "ElektrickeVedeni": "sym510", "Zed": "sym513-1a",
+                "Raseliniste": "sym307", "BazinaMocal": "sym308",
+                "TrvalyTravniPorost": "sym401",
+                "VyznamnyNeboOsamelyStromLesik": "sym417a",
+                "OsamelyBalvanSkalaSkalniSuk": "sym205",
+                "StupenSraz": "sym104", "HradbaValBastaOpevneni": "sym105-1a",
+                "ZdrojPodzemnichVod": "sym312",
+                "MohylaPomnikNahrobek": "sym526a",
+            }
+            sym_key = ZAB_MAP.get(zab_key)
+            if sym_key:
+                collector.collect(sym_key, gdf_z)
+
+        # ISOM vlastní vrstvy
+        for isom_key, gdf_i in isom_gdfs.items():
+            if gdf_i is None or gdf_i.empty:
+                continue
+            # Klíč je název souboru = kód ISOM
+            clean_key = isom_key.replace(".shp", "").replace(".SHP", "")
+            collector.collect(clean_key, gdf_i)
+
         collector.export(gpkg_path)
     except Exception as e:
+        import traceback; traceback.print_exc()
         print(f"[pipeline] GPKG chyba: {e}")
         gpkg_path = None
 
