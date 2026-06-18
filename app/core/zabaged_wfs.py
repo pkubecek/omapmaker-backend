@@ -5,9 +5,7 @@ Endpoint: https://ags.cuzk.gov.cz/arcgis/services/ZABAGED_POLOHOPIS/MapServer/WF
 - Zdarma, bez registrace, licence CC BY 4.0
 - Výchozí CRS: EPSG:5514
 - Limit: 1000 prvků na request, paginace přes startindex
-- Výstup: GEOJSON
-- Používá POST + XML body kvůli diakritice v názvech vrstev
-- bbox se posílá ve WGS84 (lon,lat,lon,lat) bez CRS suffixu
+- GET request s bbox v EPSG:5514 a srsName=http://www.opengis.net/def/crs/EPSG/0/5514
 """
 import time
 import requests
@@ -18,10 +16,8 @@ from pyproj import Transformer
 WFS_URL = "https://ags.cuzk.gov.cz/arcgis/services/ZABAGED_POLOHOPIS/MapServer/WFSServer"
 PAGE_SIZE = 1000
 MAX_RETRIES = 3
-RETRY_DELAY = 3  # sekund
+RETRY_DELAY = 3
 
-# Mapování klíčů pipeline → název WFS vrstvy
-# Názvy jsou přesně z GetCapabilities (s diakritikou)
 ZABAGED_LAYERS = {
     "SilniceDalnice":                "ZABAGED_POLOHOPIS:Silnice__dálnice",
     "Cesta":                         "ZABAGED_POLOHOPIS:Cesta",
@@ -51,51 +47,44 @@ ZABAGED_LAYERS = {
     "OrnaPudaAOstatniDaleNespecifikovanePlochy": "ZABAGED_POLOHOPIS:Orná_půda_a_ostatní_dále_nespecifikované_plochy",
 }
 
-
-def _build_xml_request(typename: str, bbox_wgs84: tuple, startindex: int) -> str:
-    """
-    Sestaví WFS 2.0 GetFeature XML request.
-    POST + XML správně řeší UTF-8 v názvech vrstev.
-    bbox_wgs84: (min_lon, min_lat, max_lon, max_lat)
-    """
-    min_lon, min_lat, max_lon, max_lat = bbox_wgs84
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<wfs:GetFeature
-    service="WFS"
-    version="2.0.0"
-    outputFormat="GEOJSON"
-    count="{PAGE_SIZE}"
-    startIndex="{startindex}"
-    xmlns:wfs="http://www.opengis.net/wfs/2.0"
-    xmlns:fes="http://www.opengis.net/fes/2.0"
-    xmlns:gml="http://www.opengis.net/gml/3.2"
-    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-    xsi:schemaLocation="http://www.opengis.net/wfs/2.0 http://schemas.opengis.net/wfs/2.0/wfs.xsd">
-  <wfs:Query typeNames="{typename}">
-    <fes:Filter>
-      <fes:BBOX>
-        <gml:Envelope srsName="urn:ogc:def:crs:OGC:1.3:CRS84">
-          <gml:lowerCorner>{min_lon} {min_lat}</gml:lowerCorner>
-          <gml:upperCorner>{max_lon} {max_lat}</gml:upperCorner>
-        </gml:Envelope>
-      </fes:BBOX>
-    </fes:Filter>
-  </wfs:Query>
-</wfs:GetFeature>"""
+# srsName dle dokumentace ČÚZK — nutno použít http:// variantu, ne urn:ogc:
+SRSNAME = "http://www.opengis.net/def/crs/EPSG/0/5514"
 
 
-def _fetch_page(typename: str, bbox_wgs84: tuple, startindex: int,
+def _fetch_page(typename: str, bbox_5514: tuple, startindex: int,
                 progress_cb=None) -> dict | None:
-    """Stáhne jednu stránku GeoJSON dat přes POST XML request."""
-    xml_body = _build_xml_request(typename, bbox_wgs84, startindex)
-    headers = {"Content-Type": "application/xml; charset=utf-8"}
+    """
+    Stáhne jednu stránku GeoJSON dat z WFS přes GET.
+    bbox_5514: (minx, miny, maxx, maxy) v EPSG:5514
+    srsName i bbox CRS musí být http://www.opengis.net/def/crs/EPSG/0/5514
+    """
+    minx, miny, maxx, maxy = bbox_5514
+    # bbox ve formátu: minx,miny,maxx,maxy,srsName
+    bbox_str = f"{minx},{miny},{maxx},{maxy},{SRSNAME}"
+
+    params = {
+        "service": "WFS",
+        "version": "2.0.0",
+        "request": "GetFeature",
+        "typeNames": typename,
+        "outputFormat": "GEOJSON",
+        "srsName": SRSNAME,
+        "count": PAGE_SIZE,
+        "startindex": startindex,
+        "bbox": bbox_str,
+    }
 
     for attempt in range(MAX_RETRIES):
         try:
-            resp = requests.post(
-                WFS_URL, data=xml_body.encode("utf-8"),
-                headers=headers, timeout=60,
+            # Použij session s explicitním UTF-8 encoding aby diakritika v typeNames prošla
+            resp = requests.get(
+                WFS_URL, params=params, timeout=60,
+                headers={"Accept-Charset": "utf-8"},
             )
+            if resp.status_code == 400:
+                # Zkus bez bbox — některé vrstvy to vyžadují
+                params_no_bbox = {k: v for k, v in params.items() if k != "bbox"}
+                resp = requests.get(WFS_URL, params=params_no_bbox, timeout=60)
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
@@ -108,14 +97,14 @@ def _fetch_page(typename: str, bbox_wgs84: tuple, startindex: int,
                 return None
 
 
-def _download_layer(key: str, typename: str, bbox_wgs84: tuple,
+def _download_layer(key: str, typename: str, bbox_5514: tuple,
                     target_crs: str, progress_cb=None) -> gpd.GeoDataFrame | None:
     """Stáhne celou vrstvu s paginací."""
     frames = []
     startindex = 0
 
     while True:
-        data = _fetch_page(typename, bbox_wgs84, startindex, progress_cb)
+        data = _fetch_page(typename, bbox_5514, startindex, progress_cb)
         if data is None:
             break
 
@@ -124,7 +113,7 @@ def _download_layer(key: str, typename: str, bbox_wgs84: tuple,
             break
 
         try:
-            gdf_page = gpd.GeoDataFrame.from_features(features, crs="EPSG:4326")
+            gdf_page = gpd.GeoDataFrame.from_features(features, crs="EPSG:5514")
             frames.append(gdf_page)
         except Exception as e:
             print(f"[zabaged_wfs] Parse chyba {key} @{startindex}: {e}")
@@ -140,13 +129,13 @@ def _download_layer(key: str, typename: str, bbox_wgs84: tuple,
     if not frames:
         return None
 
-    gdf = gpd.GeoDataFrame(pd.concat(frames, ignore_index=True), crs="EPSG:4326")
+    gdf = gpd.GeoDataFrame(pd.concat(frames, ignore_index=True), crs="EPSG:5514")
 
-    # Převod do cílového CRS
-    try:
-        gdf = gdf.to_crs(target_crs)
-    except Exception as e:
-        print(f"[zabaged_wfs] CRS převod {key}: {e}")
+    if target_crs and target_crs != "EPSG:5514":
+        try:
+            gdf = gdf.to_crs(target_crs)
+        except Exception as e:
+            print(f"[zabaged_wfs] CRS převod {key}: {e}")
 
     return gdf if not gdf.empty else None
 
@@ -163,15 +152,25 @@ def download_zabaged_wfs(
     target_crs: cílový CRS výsledných GeoDataFrames
     progress_cb: volitelná funkce(msg: str)
 
-    Vrací: dict { klíč: GeoDataFrame } — stejná struktura jako zabaged_gdfs v pipeline
+    Vrací: dict { klíč: GeoDataFrame }
     """
     def cb(msg):
         print(f"[zabaged_wfs] {msg}")
         if progress_cb:
             progress_cb(msg)
 
+    # Převod bbox z WGS84 do EPSG:5514
     min_lon, min_lat, max_lon, max_lat = bbox_wgs84
-    cb(f"Stahuji ZABAGED WFS bbox=({min_lon:.4f},{min_lat:.4f},{max_lon:.4f},{max_lat:.4f})")
+    try:
+        t = Transformer.from_crs("EPSG:4326", "EPSG:5514", always_xy=True)
+        x1, y1 = t.transform(min_lon, min_lat)
+        x2, y2 = t.transform(max_lon, max_lat)
+        bbox_5514 = (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))
+    except Exception as e:
+        cb(f"Varování: CRS transformace selhala ({e})")
+        bbox_5514 = (min_lon, min_lat, max_lon, max_lat)
+
+    cb(f"Stahuji ZABAGED WFS bbox EPSG:5514={bbox_5514}")
 
     result = {}
     total = len(ZABAGED_LAYERS)
@@ -179,7 +178,7 @@ def download_zabaged_wfs(
     for i, (key, typename) in enumerate(ZABAGED_LAYERS.items(), 1):
         cb(f"[{i}/{total}] {key}...")
         try:
-            gdf = _download_layer(key, typename, bbox_wgs84, target_crs, cb)
+            gdf = _download_layer(key, typename, bbox_5514, target_crs, cb)
             if gdf is not None and not gdf.empty:
                 result[key] = gdf
                 cb(f"  OK: {key} — {len(gdf)} prvků")
