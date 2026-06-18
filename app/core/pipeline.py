@@ -7,6 +7,7 @@ Výsledky se sloučí do finálního PNG a GPKG.
 """
 import os
 import gc
+import re
 import time
 import math
 import tempfile
@@ -40,6 +41,15 @@ from .exporter import OomCollector
 # Max velikost dlaždice v metrech. 1500×1500m při 0.5m pixelu = 9M pixelů = ~700 MB
 TILE_SIZE_M = 1500
 OVERLAP_M = 150   # překryv kvůli artefaktům na hranicích
+
+
+def _normalize_zabaged_key(key: str) -> str:
+    """
+    Normalizuje název souboru ZABAGED na kanonický klíč bez číslic/suffixů na konci.
+    Např. 'SilniceDalnice_1' → 'SilniceDalnice', 'VodniTok2' → 'VodniTok'.
+    """
+    normalized = re.sub(r'[\-_\s]*\d+$', '', key).strip('_- ')
+    return normalized if normalized else key
 
 
 def _compute_tiles(minx, maxx, miny, maxy, tile_size, overlap):
@@ -436,18 +446,33 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
 
             gdf_z = gpd.read_file(path, bbox=file_bbox) if file_bbox else gpd.read_file(path)
 
-            # Přiřadíme CRS pokud soubor nemá .prj (gdf_z.crs bude None)
+            # Přiřadíme CRS pokud soubor nemá .prj
             if gdf_z.crs is None:
                 gdf_z = gdf_z.set_crs(file_crs)
 
             if not gdf_z.empty and gdf_z.crs != crs_dst:
                 gdf_z = gdf_z.to_crs(CURRENT_CRS)
-            # Klíč bez přípony — ukládáme pod původním názvem i pod
-            # normalizovaným (bez číslic na konci, bez podtržítek) aby
-            # vector_layers.py mohl najít vrstvu bez ohledu na přesný název souboru.
+
+            # Uložíme pod původním klíčem (bez přípony)
             key = fname.rsplit(".", 1)[0]
             zabaged_gdfs[key] = gdf_z
             cb(9, f"ZABAGED OK: {key} — {len(gdf_z)} prvků, CRS={gdf_z.crs}")
+
+            # Uložíme i pod normalizovaným klíčem (bez číslic/suffixů na konci),
+            # aby vector_layers.py našel vrstvu i při nestandardním názvu souboru.
+            normalized = _normalize_zabaged_key(key)
+            if normalized != key:
+                zabaged_gdfs[normalized] = gdf_z
+                cb(9, f"ZABAGED alias: {key} → {normalized}")
+
+            # Uložíme i pod lower-case variantou pro case-insensitive fallback
+            key_lower = key.lower()
+            if key_lower != key:
+                zabaged_gdfs[key_lower] = gdf_z
+            normalized_lower = normalized.lower()
+            if normalized_lower != normalized:
+                zabaged_gdfs[normalized_lower] = gdf_z
+
         except Exception as e:
             cb(9, f"ZABAGED chyba {fname}: {e}")
 
@@ -641,7 +666,6 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
         for isom_key, gdf_i in isom_gdfs.items():
             if gdf_i is None or gdf_i.empty:
                 continue
-            # Klíč je název souboru = kód ISOM
             clean_key = isom_key.replace(".shp", "").replace(".SHP", "")
             collector.collect(clean_key, gdf_i)
 
