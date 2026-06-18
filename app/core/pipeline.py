@@ -413,11 +413,17 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
     for path in file_paths.get("zabaged", []):
         fname = os.path.basename(path)
         try:
-            with fiona.open(path) as src:
-                file_crs = CRS.from_user_input(src.crs_wkt or "EPSG:5514")
+            # Zjistíme CRS ze souboru — pokud chybí .prj, fallback na EPSG:5514
+            try:
+                with fiona.open(path) as src:
+                    crs_wkt = src.crs_wkt
+                file_crs = CRS.from_user_input(crs_wkt) if crs_wkt else CRS.from_epsg(5514)
+            except Exception:
+                file_crs = CRS.from_epsg(5514)
+
+            crs_dst = CRS.from_user_input(CURRENT_CRS)
             file_bbox = None
             try:
-                crs_dst = CRS.from_user_input(CURRENT_CRS)
                 if file_crs != crs_dst:
                     t2 = Transformer.from_crs(crs_dst, file_crs, always_xy=True)
                     b = target_bbox_geom.bounds
@@ -427,8 +433,14 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
                     file_bbox = target_bbox_geom.bounds
             except Exception:
                 pass
+
             gdf_z = gpd.read_file(path, bbox=file_bbox) if file_bbox else gpd.read_file(path)
-            if not gdf_z.empty:
+
+            # Přiřadíme CRS pokud soubor nemá .prj (gdf_z.crs bude None)
+            if gdf_z.crs is None:
+                gdf_z = gdf_z.set_crs(file_crs)
+
+            if not gdf_z.empty and gdf_z.crs != crs_dst:
                 gdf_z = gdf_z.to_crs(CURRENT_CRS)
             # Klíč bez přípony — ukládáme pod původním názvem i pod
             # normalizovaným (bez číslic na konci, bez podtržítek) aby
