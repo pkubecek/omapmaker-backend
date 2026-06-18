@@ -584,83 +584,108 @@ def add_vector_layers(
             else:
                 pm(sym, zo, mask_rail, gdf_lines)
 
-        # 507 Schody
+        # 507 Méně zřetelná stezka (sym507 = less distinct small footpath)
         cgdf = isom("507")
         if cgdf is not None:
             pm("sym507", 45, None, cgdf, to_mask=False)
         else:
-            pm("sym507", 45, c("highway") == "steps", gdf_lines)
+            pm("sym507", 45,
+               c("highway").isin(["path", "footway"]) & c("trail_visibility").isin(["bad", "horrible"]),
+               gdf_lines)
 
-        # 508 Most / lávka (silniční nebo pěší)
+        # 508 Průsek (sym508 = narrow ride)
         cgdf = isom("508")
         if cgdf is not None:
-            pm("sym508", 46, None, cgdf, to_mask=False)
+            pm("sym508", 45, None, cgdf, to_mask=False)
+        elif zab("Proseka"):
+            pm("sym508", 45, None, zab("Proseka"), to_mask=False)
         else:
-            pm("sym508", 46,
+            pm("sym508", 45,
+               c("highway").isin(["track"]) & c("landuse") == "forest",
+               gdf_lines)
+
+        # 511 Stožár el. vedení – bod (sym511P = power line pylon point symbol)
+        cgdf = isom("511")
+        if cgdf is not None:
+            pm("sym511P", 71, None, cgdf, to_mask=False)
+        else:
+            pm("sym511P", 71,
+               c("power").isin(["tower", "pole"]),
+               gdf_pts)
+
+        # 512 Most / tunel (sym512 = bridge/tunnel)
+        cgdf = isom("512")
+        if cgdf is not None:
+            pm("sym512", 46, None, cgdf, to_mask=False)
+        elif zab("Most"):
+            pm("sym512", 46, None, zab("Most"), to_mask=False)
+        else:
+            pm("sym512", 46,
                c("bridge").isin(["yes", "viaduct"]) & c("highway").notna() & (c("highway") != ""),
                gdf_lines)
 
-        # 511 Lanovka / sedačková lanovka
-        cgdf = isom("511")
-        if cgdf is not None:
-            pm("sym511", 70, None, cgdf, to_mask=False)
-        else:
-            pm("sym511", 70,
-               c("aerialway").isin(["gondola", "chair_lift", "cable_car", "drag_lift"]),
-               gdf_lines)
-
-        # 512 Kolejová lanová dráha
-        cgdf = isom("512")
-        if cgdf is not None:
-            pm("sym512", 70, None, cgdf, to_mask=False)
-        elif zab("LanovaDraha"):
-            pm("sym512", 70, None, zab("LanovaDraha"), to_mask=False)
-
-        # 514 Přehrada / hráz
+        # 514 Zřícená zeď (sym514 = ruined wall)
         cgdf = isom("514")
         if cgdf is not None:
-            pm("sym514", 45, None, cgdf, to_mask=False)
-        elif zab("Hraz"):
-            pm("sym514", 45, None, zab("Hraz"), to_mask=False)
+            pm("sym514", 30, None, cgdf, to_mask=False)
+        elif zab("ZbytkyZdi"):
+            pm("sym514", 30, None, zab("ZbytkyZdi"), to_mask=False)
         else:
-            pm("sym514", 45,
-               c("waterway").isin(["dam", "weir"]) | c("man_made") == "dam",
+            pm("sym514", 30,
+               c("barrier") == "wall" & c("historic").isin(["yes", "ruins"]),
                gdf_lines)
 
-        # 515 Zeď (průchodná)
+        # 515 Nepřekonatelná zeď (sym515a/b = impassable wall)
         cgdf = isom("515")
         if cgdf is not None:
-            pm("sym515", 30, None, cgdf, to_mask=False)
+            for s in ["sym515a", "sym515b"]:
+                pm(s, 30, None, cgdf, to_mask=False)
+        elif zab("NeprekZed"):
+            for s in ["sym515a", "sym515b"]:
+                pm(s, 30, None, zab("NeprekZed"), to_mask=False)
         else:
-            pm("sym515", 30,
-               c("barrier").isin(["fence", "wire_fence", "chain_link_fence"]),
-               gdf_lines)
+            mask_imp_wall = c("barrier") == "wall" & c("access").isin(["no", "private"])
+            pm("sym515a", 30, mask_imp_wall, gdf_lines)
+            pm("sym515b", 30, mask_imp_wall, gdf_lines)
 
-        # 516 Plot / plůtek
+        # 516 Plot (sym516 = fence)
         cgdf = isom("516")
         if cgdf is not None:
             pm("sym516", 30, None, cgdf, to_mask=False)
+        elif zab("Ohrada"):
+            pm("sym516", 30, None, zab("Ohrada"), to_mask=False)
         else:
-            pm("sym516", 30, c("barrier").isin(["fence", "railing"]), gdf_lines)
+            pm("sym516", 30,
+               c("barrier").isin(["fence", "railing", "wire_fence", "chain_link_fence"]),
+               gdf_lines)
 
-        # 517 Nepřekonatelná zeď/plot
+        # 517 Zřícený plot (sym517 = ruined fence)
         cgdf = isom("517")
         if cgdf is not None:
             pm("sym517", 30, None, cgdf, to_mask=False)
+        else:
+            pm("sym517", 30,
+               c("barrier").isin(["fence"]) & c("historic").isin(["yes", "ruins"]),
+               gdf_lines)
 
-        # 518 Kůlna / přístřešek
+        # 518 Nepřekonatelný plot (sym518 = impassable fence)
         cgdf = isom("518")
         if cgdf is not None:
-            pm("sym518", 50, None, cgdf, to_mask=False)
+            pm("sym518", 30, None, cgdf, to_mask=False)
         else:
-            pm("sym518", 50,
-               c("building").isin(["shed", "shelter", "hut"]),
-               gdf_polys)
+            pm("sym518", 30,
+               c("barrier").isin(["fence", "wall"]) & c("access").isin(["no", "private"]) &
+               ~(c("barrier") == "wall"),
+               gdf_lines)
 
-        # 519 Zpevněná plocha (obydlená oblast)
+        # 519 Průchod plotem/zdí (sym519 = crossing point)
         cgdf = isom("519")
         if cgdf is not None:
-            pm("sym519", 1.5, None, cgdf, to_mask=False)
+            pm("sym519", 56, None, cgdf, to_mask=False)
+        else:
+            pm("sym519", 56,
+               c("barrier").isin(["gate", "kissing_gate", "stile", "lift_gate"]),
+               gdf_pts)
 
 
     # ----------------------------------------------------------------
@@ -737,23 +762,27 @@ def add_vector_layers(
                c("historic").isin(["memorial", "boundary_stone", "wayside_cross"]),
                gdf_centroids)
 
-        # 522 Ruina budovy
+        # 522 Přístřešek / canopy (sym522 = canopy, grey area)
         cgdf = isom("522")
         if cgdf is not None:
             pm("sym522", 50, None, cgdf, to_mask=False)
-        elif zab("ZbytkyBudovy"):
-            pm("sym522", 50, None, zab("ZbytkyBudovy"), to_mask=False)
         else:
             pm("sym522", 50,
-               c("building").isin(["ruins"]) | c("historic").isin(["ruins"]),
+               c("building").isin(["shed", "shelter", "carport", "canopy", "roof"]),
                gdf_polys)
 
-        # 523 Nástupní plocha / terasa
+        # 523 Ruina (sym523 = ruin, open square corners)
         cgdf = isom("523")
         if cgdf is not None:
             pm("sym523", 50, None, cgdf, to_mask=False)
+        elif zab("ZbytkyBudovy"):
+            pm("sym523", 50, None, zab("ZbytkyBudovy"), to_mask=False)
+        else:
+            pm("sym523", 50,
+               c("building").isin(["ruins"]) | c("historic").isin(["ruins"]),
+               gdf_centroids)
 
-        # 525 Malá věž / sloupek
+        # 525 Malá věž (sym525 = small tower, T-shape)
         cgdf = isom("525")
         if cgdf is not None:
             pm("sym525", 56, None, cgdf, to_mask=False)
@@ -763,54 +792,43 @@ def add_vector_layers(
                c("historic").isin(["boundary_stone", "milestone"]),
                gdf_pts)
 
-        # 527 Jáma nebo průkop (umělý)
+        # 527 Krmítko / drobný terénní prvek (sym527 = fodder rack, X in square)
         cgdf = isom("527")
         if cgdf is not None:
-            pm("sym527", 30, None, cgdf, to_mask=False)
-        elif zab("Jama"):
-            pm("sym527", 30, None, zab("Jama"), to_mask=False)
+            pm("sym527", 56, None, cgdf, to_mask=False)
+        elif zab("Krmitko"):
+            pm("sym527", 56, None, zab("Krmitko"), to_mask=False)
         else:
-            pm("sym527", 30,
-               c("man_made").isin(["mineshaft", "adit"]) | c("geological") == "outcrop",
+            pm("sym527", 56,
+               c("amenity").isin(["hunting_stand"]) | c("man_made").isin(["feeding_place"]),
                gdf_pts)
 
-        # 528 Střelecké nebo sportovní hřiště
+        # 528 Výrazný liniový prvek – průchodný (sym528 = prominent passable line)
         cgdf = isom("528")
         if cgdf is not None:
-            pm("sym528", 1.5, None, cgdf, to_mask=False)
-        else:
-            pm("sym528", 1.5,
-               c("leisure").isin(["sports_centre", "pitch", "stadium"]),
-               gdf_polys)
+            pm("sym528", 30, None, cgdf, to_mask=False)
 
-        # 529 Zahrada / park
+        # 529 Výrazný liniový prvek – nepřekonatelný (sym529 = prominent impassable line)
         cgdf = isom("529")
         if cgdf is not None:
-            pm("sym529", 1.5, None, cgdf, to_mask=False)
-        else:
-            pm("sym529", 1.5,
-               c("leisure").isin(["park", "garden"]) | c("landuse").isin(["recreation_ground"]),
-               gdf_polys)
+            pm("sym529", 30, None, cgdf, to_mask=False)
 
-        # 530 Půdorys budovy s parkovištěm / dvorem
+        # 530 Výrazný bodový prvek – kroužek (sym530 = prominent feature ring)
         cgdf = isom("530")
         if cgdf is not None:
-            pm("sym530", 50, None, cgdf, to_mask=False)
+            pm("sym530", 56, None, cgdf, to_mask=False)
 
-        # 531 Průchodná zeď nebo plot (překonatelný)
+        # 531 Výrazný bodový prvek – křížek (sym531 = prominent feature X)
         cgdf = isom("531")
         if cgdf is not None:
-            pm("sym531", 30, None, cgdf, to_mask=False)
-        elif zab("Ohrada"):
-            pm("sym531", 30, None, zab("Ohrada"), to_mask=False)
-        else:
-            pm("sym531", 30, c("barrier").isin(["wall", "fence"]) & c("access") == "yes", gdf_lines)
+            pm("sym531", 56, None, cgdf, to_mask=False)
 
-        # 532 Nepřekonatelná zeď nebo plot
+        # 532 Schody (sym532a/b/c = stairway)
         cgdf = isom("532")
         if cgdf is not None:
-            pm("sym532", 30, None, cgdf, to_mask=False)
+            for s in ["sym532a", "sym532b", "sym532c"]:
+                pm(s, 46, None, cgdf, to_mask=False)
         else:
-            pm("sym532", 30,
-               c("barrier").isin(["wall", "fence"]) & c("access").isin(["no", "private"]),
-               gdf_lines)
+            mask_steps = c("highway") == "steps"
+            for s in ["sym532a", "sym532b", "sym532c"]:
+                pm(s, 46, mask_steps, gdf_lines)
