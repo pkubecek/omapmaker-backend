@@ -28,6 +28,7 @@ from shapely.geometry import box
 from rasterio.features import rasterize
 from rasterio.io import MemoryFile
 
+from .zabaged_wfs import download_zabaged_wfs
 from .processor import (
     load_dmr_grid, load_dmp_grid,
     classify_vegetation, vectorize_rocks,
@@ -417,9 +418,35 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
         cb(8, f"Varování OSM: {e}")
 
     # ZABAGED
-    cb(9, "Načítám ZABAGED® soubory...")
+    cb(9, "Načítám ZABAGED® data...")
     zabaged_gdfs = {}
     target_bbox_geom = box(global_minx, global_miny, global_maxx, global_maxy)
+
+    # Automatické stažení přes WFS pokud uživatel zaškrtl checkbox
+    if params.get("download_zabaged", False):
+        cb(9, "Stahuji ZABAGED® přes WFS (ČÚZK)...")
+        try:
+            to_wgs84 = Transformer.from_crs(CURRENT_CRS, "EPSG:4326", always_xy=True)
+            wgs_x1, wgs_y1 = to_wgs84.transform(global_minx, global_miny)
+            wgs_x2, wgs_y2 = to_wgs84.transform(global_maxx, global_maxy)
+            # Přidej buffer 500m aby se ořízly prvky na hranici oblasti
+            buf_deg = 500 / 111320
+            wfs_bbox = (
+                min(wgs_x1, wgs_x2) - buf_deg,
+                min(wgs_y1, wgs_y2) - buf_deg,
+                max(wgs_x1, wgs_x2) + buf_deg,
+                max(wgs_y1, wgs_y2) + buf_deg,
+            )
+            zabaged_gdfs = download_zabaged_wfs(
+                bbox_wgs84=wfs_bbox,
+                target_crs=CURRENT_CRS,
+                progress_cb=lambda msg: cb(9, f"ZABAGED WFS: {msg}"),
+            )
+            cb(9, f"ZABAGED WFS: staženo {len(zabaged_gdfs)} vrstev")
+        except Exception as e:
+            cb(9, f"Varování ZABAGED WFS: {e}")
+
+    # Manuálně nahrané soubory (pokud nejsou WFS data nebo jako doplněk)
     for path in file_paths.get("zabaged", []):
         fname = os.path.basename(path)
         try:
