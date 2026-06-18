@@ -412,16 +412,17 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
     zabaged_gdfs = {}
     target_bbox_geom = box(global_minx, global_miny, global_maxx, global_maxy)
 
-    # Automatické stažení přes ArcGIS REST API pokud uživatel nenahrál vlastní soubory
-    if not file_paths.get("zabaged"):
+    # Automatické stažení přes ArcGIS REST API — pouze pokud je zaškrtnuto v nastavení
+    # a uživatel nenahrál vlastní soubory
+    use_zabaged = params.get("download_zabaged", False)
+    if use_zabaged and not file_paths.get("zabaged"):
         cb(9, "Stahuji ZABAGED® data z ČÚZK REST API...")
         try:
-            to_wgs2 = Transformer.from_crs(CURRENT_CRS, "EPSG:4326", always_xy=True)
-            zab_minx, zab_miny = to_wgs2.transform(global_minx, global_miny)
-            zab_maxx, zab_maxy = to_wgs2.transform(global_maxx, global_maxy)
-            bbox_wgs84 = (zab_minx, zab_miny, zab_maxx, zab_maxy)
+            to_wgs_zab = Transformer.from_crs(CURRENT_CRS, "EPSG:4326", always_xy=True)
+            zab_minx, zab_miny = to_wgs_zab.transform(global_minx, global_miny)
+            zab_maxx, zab_maxy = to_wgs_zab.transform(global_maxx, global_maxy)
             zabaged_gdfs = download_zabaged_wfs(
-                bbox_wgs84=bbox_wgs84,
+                bbox_wgs84=(zab_minx, zab_miny, zab_maxx, zab_maxy),
                 target_crs=CURRENT_CRS,
                 progress_cb=lambda msg: cb(9, msg),
             )
