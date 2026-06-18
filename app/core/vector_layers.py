@@ -101,10 +101,61 @@ def add_vector_layers(
             for s in ["sym105-1a", "sym105-1b"]:
                 pm(s, 30, None, zab("HradbaValBastaOpevneni"), to_mask=False)
 
+        # 106 Zřícená zemní zeď
+        cgdf = isom("106")
+        if cgdf is not None:
+            pm("sym106", 21, None, cgdf, to_mask=False)
+        else:
+            pm("sym106", 21, c("barrier").isin(["ditch", "hedge"]) & (c("historic") == "yes"), gdf_lines)
+
+        # 110 Podlouhlý kopeček
+        cgdf = isom("110")
+        if cgdf is not None:
+            pm("sym110", 21, None, cgdf, to_mask=False)
+
+        # 113 Nerovný terén
+        cgdf = isom("113")
+        if cgdf is not None:
+            pm("sym113", 18, None, cgdf, to_mask=False)
+        elif zab("NasupisteHraze"):
+            pm("sym113", 18, None, zab("NasupisteHraze"), to_mask=False)
+
+        # 114 Velmi nerovný terén
+        cgdf = isom("114")
+        if cgdf is not None:
+            pm("sym114", 18, None, cgdf, to_mask=False)
+
+        # 115 Výrazný terénní útvar
+        cgdf = isom("115")
+        if cgdf is not None:
+            pm("sym115", 56, None, cgdf, to_mask=False)
+
     # ----------------------------------------------------------------
     # ROCKS
     # ----------------------------------------------------------------
     if visibility.get("rocks", True):
+        # 201 Nepřekonatelná skála/sráz
+        cgdf = isom("201")
+        if cgdf is not None:
+            pm("sym201", 57, None, cgdf, to_mask=False)
+        elif zab("SkalniSraz"):
+            pm("sym201", 57, None, zab("SkalniSraz"), to_mask=False)
+        else:
+            pm("sym201", 57,
+               c("natural").isin(["cliff"]) & ~c("access").isin(["yes", "permissive"]),
+               gdf_lines)
+
+        # 202 Překonatelný sráz/lom
+        cgdf = isom("202")
+        if cgdf is not None:
+            pm("sym202", 56, None, cgdf, to_mask=False)
+        elif zab("Lom"):
+            pm("sym202", 56, None, zab("Lom"), to_mask=False)
+        else:
+            pm("sym202", 56,
+               c("natural").isin(["cliff"]) | c("man_made").isin(["embankment", "cutting"]),
+               gdf_lines)
+
         for code, sym, zo in [("203.1", "sym203-1", 56), ("204", "sym204", 56),
                                ("205", "sym205", 56), ("207", "sym207", 56),
                                ("208", "sym208", 18), ("209", "sym209", 18),
@@ -118,7 +169,45 @@ def add_vector_layers(
         elif isom("205") is None:
             pm("sym205", 56, c("natural").isin(["stone", "rock"]), gdf_centroids)
 
-        if isom("215") is None:
+        # 203.2 Nebezpečná jáma
+        cgdf = isom("203.2")
+        if cgdf is not None:
+            pm("sym203-2", 56, None, cgdf, to_mask=False)
+
+        # 206 Obrovský balvan nebo skalní pilíř
+        cgdf = isom("206")
+        if cgdf is not None:
+            pm("sym206", 56, None, cgdf, to_mask=False)
+        elif zab("OsamelyBalvanSkalaSkalniSuk"):
+            # použij pouze velmi velké objekty pokud je atribut k dispozici
+            mask = _get_col(zab("OsamelyBalvanSkalaSkalniSuk"), "vyska_p") > 5
+            if mask.any():
+                pm("sym206", 56, mask, zab("OsamelyBalvanSkalaSkalniSuk"))
+
+        # 211 Kamenité – chůze
+        cgdf = isom("211")
+        if cgdf is not None:
+            pm("sym211", 18, None, cgdf, to_mask=False)
+        else:
+            pm("sym211", 18,
+               c("surface").isin(["rocks", "rock"]) | c("natural").isin(["scree"]),
+               gdf_polys)
+
+        # 212 Kamenité – boj
+        cgdf = isom("212")
+        if cgdf is not None:
+            pm("sym212", 18, None, cgdf, to_mask=False)
+
+        # 214 Holá skála
+        cgdf = isom("214")
+        if cgdf is not None:
+            pm("sym214", 18, None, cgdf, to_mask=False)
+        elif zab("SkalniUtvar"):
+            pm("sym214", 18, None, zab("SkalniUtvar"), to_mask=False)
+        else:
+            pm("sym214", 18, c("natural") == "bare_rock", gdf_polys)
+
+
             mask_ditch = c("barrier").isin(["ditch"]) | c("military").isin(["trench"])
             pm("sym215a", 21, mask_ditch, gdf_lines)
             pm("sym215b", 21, mask_ditch, gdf_lines)
@@ -189,8 +278,70 @@ def add_vector_layers(
         else:
             pm("sym312", 52, (c("natural") == "spring") & (c("covered") != "yes"), gdf_centroids)
 
-    # ----------------------------------------------------------------
-    # VEGETATION
+        # 302 Mělká vodní plocha
+        cgdf = isom("302")
+        if cgdf is not None:
+            pm("sym302", 27, None, cgdf, to_mask=False)
+        else:
+            pm("sym302", 27,
+               c("natural").isin(["water"]) & c("water").isin(["pond", "stream"]) |
+               c("waterway").isin(["riverbank"]) & ~c("water").isin(["lake", "reservoir"]),
+               gdf_polys)
+
+        # 303 Napajedlo / malá vodní plocha
+        cgdf = isom("303")
+        if cgdf is not None:
+            pm("sym303", 52, None, cgdf, to_mask=False)
+        else:
+            pm("sym303", 52,
+               c("amenity").isin(["watering_place"]) | c("natural").isin(["waterhole"]),
+               gdf_centroids)
+
+        # 306 Přerušovaný potok
+        cgdf = isom("306")
+        if cgdf is not None:
+            pm("sym306", 26, None, cgdf, to_mask=False)
+        elif zab("VodniTok"):
+            mask = _get_col(zab("VodniTok"), "vydattok_p").isin(["přerušovaný"])
+            pm("sym306", 26, mask, zab("VodniTok"))
+        else:
+            pm("sym306", 26,
+               c("waterway").isin(["stream", "ditch"]) & c("intermittent").isin(["yes"]),
+               gdf_lines)
+
+        # 309 Nepřekonatelné bažiništní plochy
+        cgdf = isom("309")
+        if cgdf is not None:
+            pm("sym309", 25, None, cgdf, to_mask=False)
+
+        # 310 Vodní kanál
+        cgdf = isom("310")
+        if cgdf is not None:
+            pm("sym310", 26, None, cgdf, to_mask=False)
+        elif zab("VodniTok"):
+            mask = _get_col(zab("VodniTok"), "typtoku_p").isin(["kanál"])
+            pm("sym310", 26, mask, zab("VodniTok"))
+        else:
+            pm("sym310", 26, c("waterway") == "canal", gdf_lines)
+
+        # 311 Malý vodní kanál
+        cgdf = isom("311")
+        if cgdf is not None:
+            pm("sym311", 26, None, cgdf, to_mask=False)
+        else:
+            pm("sym311", 26, c("waterway") == "drain", gdf_lines)
+
+        # 313 Průchozí pramen / vyvěračka
+        cgdf = isom("313")
+        if cgdf is not None:
+            pm("sym313", 52, None, cgdf, to_mask=False)
+        elif zab("ZdrojPodzemnichVod"):
+            mask = _get_col(zab("ZdrojPodzemnichVod"), "typzdroje_p").isin(["vývěr"])
+            pm("sym313", 52, mask, zab("ZdrojPodzemnichVod"))
+        else:
+            pm("sym313", 52, c("natural") == "spring", gdf_centroids)
+
+
     # ----------------------------------------------------------------
     if visibility.get("vegetation", True):
         for code, sym, zo in [("401", "sym401", 1.0), ("402", "sym402", 1.0),
@@ -220,11 +371,140 @@ def add_vector_layers(
             pm("sym417a", 54, c("natural") == "tree", gdf_centroids)
             pm("sym417b", 55, c("natural") == "tree", gdf_centroids)
 
-    # ----------------------------------------------------------------
-    # ROADS
+        # 403 Otevřená plocha s rozptýlenou vegetací
+        cgdf = isom("403")
+        if cgdf is not None:
+            pm("sym403", 1.0, None, cgdf, to_mask=False)
+        else:
+            pm("sym403", 1.0,
+               c("landuse").isin(["heath", "scrub"]) | c("natural").isin(["heath"]),
+               gdf_polys)
+
+        # 404 Drsná otevřená plocha
+        cgdf = isom("404")
+        if cgdf is not None:
+            pm("sym404", 1.0, None, cgdf, to_mask=False)
+        else:
+            pm("sym404", 1.0,
+               c("landuse").isin(["brownfield", "landfill"]) | c("natural").isin(["fell"]),
+               gdf_polys)
+
+        # 405 Les: dobrá průběžnost
+        cgdf = isom("405")
+        if cgdf is not None:
+            pm("sym405", 1.1, None, cgdf, to_mask=False)
+        elif zab("LesniPozemek"):
+            mask = _get_col(zab("LesniPozemek"), "druhporost_p").isin(["jehličnatý", "listnatý", "smíšený"])
+            pm("sym405", 1.1, mask, zab("LesniPozemek"))
+        else:
+            pm("sym405", 1.1,
+               c("landuse").isin(["forest"]) | c("natural").isin(["wood"]),
+               gdf_polys)
+
+        # 406 Les: průměrná průběžnost
+        cgdf = isom("406")
+        if cgdf is not None:
+            pm("sym406", 1.2, None, cgdf, to_mask=False)
+
+        # 407 Les: špatná průběžnost
+        cgdf = isom("407")
+        if cgdf is not None:
+            pm("sym407", 1.3, None, cgdf, to_mask=False)
+
+        # 408 Hustý podrost: pomalý běh
+        cgdf = isom("408")
+        if cgdf is not None:
+            pm("sym408", 1.5, None, cgdf, to_mask=False)
+        else:
+            pm("sym408", 1.5,
+               c("landuse").isin(["scrub"]) | c("natural").isin(["scrub"]),
+               gdf_polys)
+
+        # 409 Hustý podrost: chůze
+        cgdf = isom("409")
+        if cgdf is not None:
+            pm("sym409", 1.6, None, cgdf, to_mask=False)
+
+        # 410 Hustý podrost: boj
+        cgdf = isom("410")
+        if cgdf is not None:
+            pm("sym410", 1.7, None, cgdf, to_mask=False)
+        else:
+            pm("sym410", 1.7,
+               c("natural").isin(["scrub"]) & c("access").isin(["no"]),
+               gdf_polys)
+
+        # 411 Kultivovaná plocha (pole, zahrada)
+        cgdf = isom("411")
+        if cgdf is not None:
+            pm("sym411", 1.8, None, cgdf, to_mask=False)
+        else:
+            pm("sym411", 1.8,
+               c("landuse").isin(["orchard", "vineyard", "allotments", "garden"]),
+               gdf_polys)
+
+        # 414 Prosvětlená plocha (paseka)
+        cgdf = isom("414")
+        if cgdf is not None:
+            pm("sym414", 1.9, None, cgdf, to_mask=False)
+        else:
+            pm("sym414", 1.9,
+               c("landuse").isin(["clear_cut"]) | c("natural").isin(["fell"]),
+               gdf_polys)
+
+        # 415 Holá skála s vegetací
+        cgdf = isom("415")
+        if cgdf is not None:
+            pm("sym415", 1.9, None, cgdf, to_mask=False)
+
+        # 416 Podrost s dobrým průběhem v jednom směru
+        cgdf = isom("416")
+        if cgdf is not None:
+            pm("sym416", 1.9, None, cgdf, to_mask=False)
+
+        # 418 Výrazný keř
+        cgdf = isom("418")
+        if cgdf is not None:
+            pm("sym418", 54, None, cgdf, to_mask=False)
+        else:
+            pm("sym418", 54, c("natural") == "shrub", gdf_centroids)
+
+        # 419 Nízká vegetace bez průběhu
+        cgdf = isom("419")
+        if cgdf is not None:
+            pm("sym419", 1.9, None, cgdf, to_mask=False)
+
+        # 420 Ovocný sad / sad
+        cgdf = isom("420")
+        if cgdf is not None:
+            pm("sym420", 1.9, None, cgdf, to_mask=False)
+        else:
+            pm("sym420", 1.9, c("landuse").isin(["orchard"]), gdf_polys)
+
+        # 421 Vinice
+        cgdf = isom("421")
+        if cgdf is not None:
+            pm("sym421", 1.9, None, cgdf, to_mask=False)
+        else:
+            pm("sym421", 1.9, c("landuse").isin(["vineyard"]), gdf_polys)
+
+
     # ----------------------------------------------------------------
     if visibility.get("roads", True):
-        # 502D Dálnice
+        # 501 Zpevněná plocha (parkoviště, náměstí)
+        cgdf = isom("501")
+        if cgdf is not None:
+            pm("sym501", 44, None, cgdf, to_mask=False)
+        elif zab("Parkoviste"):
+            pm("sym501", 44, None, zab("Parkoviste"), to_mask=False)
+        else:
+            pm("sym501", 44,
+               c("highway").isin(["pedestrian"]) & c("area") == "yes" |
+               c("amenity").isin(["parking"]) |
+               c("landuse").isin(["garages"]),
+               gdf_polys)
+
+
         mask_motorway = c("highway").isin(["motorway", "trunk"]) & \
                         ~c("tunnel").isin(["yes"]) & (c("bridge") != "yes")
         cgdf = isom("502D")
@@ -304,8 +584,85 @@ def add_vector_layers(
             else:
                 pm(sym, zo, mask_rail, gdf_lines)
 
-    # ----------------------------------------------------------------
-    # MAN-MADE
+        # 507 Schody
+        cgdf = isom("507")
+        if cgdf is not None:
+            pm("sym507", 45, None, cgdf, to_mask=False)
+        else:
+            pm("sym507", 45, c("highway") == "steps", gdf_lines)
+
+        # 508 Most / lávka (silniční nebo pěší)
+        cgdf = isom("508")
+        if cgdf is not None:
+            pm("sym508", 46, None, cgdf, to_mask=False)
+        else:
+            pm("sym508", 46,
+               c("bridge").isin(["yes", "viaduct"]) & c("highway").notna() & (c("highway") != ""),
+               gdf_lines)
+
+        # 511 Lanovka / sedačková lanovka
+        cgdf = isom("511")
+        if cgdf is not None:
+            pm("sym511", 70, None, cgdf, to_mask=False)
+        else:
+            pm("sym511", 70,
+               c("aerialway").isin(["gondola", "chair_lift", "cable_car", "drag_lift"]),
+               gdf_lines)
+
+        # 512 Kolejová lanová dráha
+        cgdf = isom("512")
+        if cgdf is not None:
+            pm("sym512", 70, None, cgdf, to_mask=False)
+        elif zab("LanovaDraha"):
+            pm("sym512", 70, None, zab("LanovaDraha"), to_mask=False)
+
+        # 514 Přehrada / hráz
+        cgdf = isom("514")
+        if cgdf is not None:
+            pm("sym514", 45, None, cgdf, to_mask=False)
+        elif zab("Hraz"):
+            pm("sym514", 45, None, zab("Hraz"), to_mask=False)
+        else:
+            pm("sym514", 45,
+               c("waterway").isin(["dam", "weir"]) | c("man_made") == "dam",
+               gdf_lines)
+
+        # 515 Zeď (průchodná)
+        cgdf = isom("515")
+        if cgdf is not None:
+            pm("sym515", 30, None, cgdf, to_mask=False)
+        else:
+            pm("sym515", 30,
+               c("barrier").isin(["fence", "wire_fence", "chain_link_fence"]),
+               gdf_lines)
+
+        # 516 Plot / plůtek
+        cgdf = isom("516")
+        if cgdf is not None:
+            pm("sym516", 30, None, cgdf, to_mask=False)
+        else:
+            pm("sym516", 30, c("barrier").isin(["fence", "railing"]), gdf_lines)
+
+        # 517 Nepřekonatelná zeď/plot
+        cgdf = isom("517")
+        if cgdf is not None:
+            pm("sym517", 30, None, cgdf, to_mask=False)
+
+        # 518 Kůlna / přístřešek
+        cgdf = isom("518")
+        if cgdf is not None:
+            pm("sym518", 50, None, cgdf, to_mask=False)
+        else:
+            pm("sym518", 50,
+               c("building").isin(["shed", "shelter", "hut"]),
+               gdf_polys)
+
+        # 519 Zpevněná plocha (obydlená oblast)
+        cgdf = isom("519")
+        if cgdf is not None:
+            pm("sym519", 1.5, None, cgdf, to_mask=False)
+
+
     # ----------------------------------------------------------------
     if visibility.get("man_made", True):
         # 510 El. vedení
@@ -380,4 +737,80 @@ def add_vector_layers(
                c("historic").isin(["memorial", "boundary_stone", "wayside_cross"]),
                gdf_centroids)
 
-    print("[vector_layers] Vše vykresleno")
+        # 522 Ruina budovy
+        cgdf = isom("522")
+        if cgdf is not None:
+            pm("sym522", 50, None, cgdf, to_mask=False)
+        elif zab("ZbytkyBudovy"):
+            pm("sym522", 50, None, zab("ZbytkyBudovy"), to_mask=False)
+        else:
+            pm("sym522", 50,
+               c("building").isin(["ruins"]) | c("historic").isin(["ruins"]),
+               gdf_polys)
+
+        # 523 Nástupní plocha / terasa
+        cgdf = isom("523")
+        if cgdf is not None:
+            pm("sym523", 50, None, cgdf, to_mask=False)
+
+        # 525 Malá věž / sloupek
+        cgdf = isom("525")
+        if cgdf is not None:
+            pm("sym525", 56, None, cgdf, to_mask=False)
+        else:
+            pm("sym525", 56,
+               c("man_made").isin(["surveillance", "flagpole"]) |
+               c("historic").isin(["boundary_stone", "milestone"]),
+               gdf_pts)
+
+        # 527 Jáma nebo průkop (umělý)
+        cgdf = isom("527")
+        if cgdf is not None:
+            pm("sym527", 30, None, cgdf, to_mask=False)
+        elif zab("Jama"):
+            pm("sym527", 30, None, zab("Jama"), to_mask=False)
+        else:
+            pm("sym527", 30,
+               c("man_made").isin(["mineshaft", "adit"]) | c("geological") == "outcrop",
+               gdf_pts)
+
+        # 528 Střelecké nebo sportovní hřiště
+        cgdf = isom("528")
+        if cgdf is not None:
+            pm("sym528", 1.5, None, cgdf, to_mask=False)
+        else:
+            pm("sym528", 1.5,
+               c("leisure").isin(["sports_centre", "pitch", "stadium"]),
+               gdf_polys)
+
+        # 529 Zahrada / park
+        cgdf = isom("529")
+        if cgdf is not None:
+            pm("sym529", 1.5, None, cgdf, to_mask=False)
+        else:
+            pm("sym529", 1.5,
+               c("leisure").isin(["park", "garden"]) | c("landuse").isin(["recreation_ground"]),
+               gdf_polys)
+
+        # 530 Půdorys budovy s parkovištěm / dvorem
+        cgdf = isom("530")
+        if cgdf is not None:
+            pm("sym530", 50, None, cgdf, to_mask=False)
+
+        # 531 Průchodná zeď nebo plot (překonatelný)
+        cgdf = isom("531")
+        if cgdf is not None:
+            pm("sym531", 30, None, cgdf, to_mask=False)
+        elif zab("Ohrada"):
+            pm("sym531", 30, None, zab("Ohrada"), to_mask=False)
+        else:
+            pm("sym531", 30, c("barrier").isin(["wall", "fence"]) & c("access") == "yes", gdf_lines)
+
+        # 532 Nepřekonatelná zeď nebo plot
+        cgdf = isom("532")
+        if cgdf is not None:
+            pm("sym532", 30, None, cgdf, to_mask=False)
+        else:
+            pm("sym532", 30,
+               c("barrier").isin(["wall", "fence"]) & c("access").isin(["no", "private"]),
+               gdf_lines)
