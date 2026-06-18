@@ -53,7 +53,9 @@ async def create_job(
     dtm: UploadFile = File(...),
     dsm: UploadFile = File(...),
     zabaged: list[UploadFile] = File(default=[]),
+    zabaged_sidecar: list[UploadFile] = File(default=[]),
     isom: list[UploadFile] = File(default=[]),
+    isom_sidecar: list[UploadFile] = File(default=[]),
     params: str = Form(...),
 ):
     job_id = str(uuid.uuid4())[:8]
@@ -62,6 +64,17 @@ async def create_job(
 
     dtm_path = _save_file(dtm, job_dir)
     dsm_path = _save_file(dsm, job_dir)
+
+    # Sidecar soubory (.dbf, .shx, .prj) ulož do stejné složky jako .shp
+    # aby je geopandas/fiona při read_file() automaticky našlo podle názvu
+    for f in zabaged_sidecar:
+        if f.filename:
+            _save_file(f, job_dir)
+    for f in isom_sidecar:
+        if f.filename:
+            _save_file(f, job_dir)
+
+    # .shp soubory — ty se předají do pipeline jako cesty
     zabaged_paths = [_save_file(f, job_dir) for f in zabaged if f.filename]
     isom_paths = [_save_file(f, job_dir) for f in isom if f.filename]
 
@@ -162,7 +175,6 @@ async def get_gpkg(job_id: str):
 @router.get("/crt/{filename}")
 async def get_crt(filename: str):
     """Vrátí .crt soubor pro import do OpenOrienteering Mapperu."""
-    # Hledáme CRT soubory v kořeni projektu
     for search_dir in [
         ".",
         os.path.join(os.path.dirname(__file__), "..", ".."),
