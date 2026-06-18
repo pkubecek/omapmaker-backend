@@ -506,7 +506,7 @@ def add_vector_layers(
             pm("sym501", 44, None, zab("Parkoviste"), to_mask=False)
         else:
             pm("sym501", 44,
-               c("highway").isin(["pedestrian"]) & c("area") == "yes" |
+               (c("highway").isin(["pedestrian"]) & (c("area") == "yes")) |
                c("amenity").isin(["parking"]) |
                c("landuse").isin(["garages"]),
                gdf_polys)
@@ -608,7 +608,7 @@ def add_vector_layers(
             pm("sym508", 45, None, zab("Proseka"), to_mask=False)
         else:
             pm("sym508", 45,
-               c("highway").isin(["track"]) & c("landuse") == "forest",
+               c("highway").isin(["track"]) & (c("landuse") == "forest"),
                gdf_lines)
 
         # 511 Stožár el. vedení – bod (sym511P = power line pylon point symbol)
@@ -639,7 +639,7 @@ def add_vector_layers(
             pm("sym514", 30, None, zab("ZbytkyZdi"), to_mask=False)
         else:
             pm("sym514", 30,
-               c("barrier") == "wall" & c("historic").isin(["yes", "ruins"]),
+               (c("barrier") == "wall") & c("historic").isin(["yes", "ruins"]),
                gdf_lines)
 
         # 515 Nepřekonatelná zeď (sym515a/b = impassable wall)
@@ -651,7 +651,7 @@ def add_vector_layers(
             for s in ["sym515a", "sym515b"]:
                 pm(s, 30, None, zab("NeprekZed"), to_mask=False)
         else:
-            mask_imp_wall = c("barrier") == "wall" & c("access").isin(["no", "private"])
+            mask_imp_wall = (c("barrier") == "wall") & c("access").isin(["no", "private"])
             pm("sym515a", 30, mask_imp_wall, gdf_lines)
             pm("sym515b", 30, mask_imp_wall, gdf_lines)
 
