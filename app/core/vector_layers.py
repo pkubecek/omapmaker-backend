@@ -554,12 +554,12 @@ def add_vector_layers(
         cgdf = isom("503")
         mask_road_minor = (c("highway").isin(["tertiary_link", "service"]) |
                            (c("highway").isin(["track", "road", "cycleway", "unclassified"]) &
-                            (c("surface").isin(["concrete", "asphalt"]) | (c("tracktype") == "grade1")))) &                           ~c("tunnel").isin(["yes", "avalanche_protector", "building_passage"]) &                           (c("bridge") != "yes") & (c("access") != "private")
+                            (c("surface").isin(["concrete", "asphalt"]) | (c("tracktype") == "grade1")))) & ~c("tunnel").isin(["yes", "avalanche_protector", "building_passage"]) &                           (c("bridge") != "yes") & (c("access") != "private")
         if cgdf is not None:
             pm("sym503", 45, None, cgdf, to_mask=False)
         elif zab("Cesta") is not None:
             mask = _get_col(zab("Cesta"), "povrch_p").isin(
-                ["zpevněný (panel, dlažba)", "zpevněný (asfalt, beton)"]) &                    _get_col(zab("Cesta"), "typcesty_p").isin(["cesta udržovaná"])
+                ["zpevněný (panel, dlažba)", "zpevněný (asfalt, beton)"]) &   _get_col(zab("Cesta"), "typcesty_p").isin(["cesta udržovaná"]) & _get_col(zab("Ulice"), "typulice_k").isin(["026", "926"])
             pm("sym503", 45, mask, zab("Cesta"))
         else:
             pm("sym503", 45, mask_road_minor, gdf_lines)
@@ -574,7 +574,7 @@ def add_vector_layers(
         elif zab("Cesta") is not None:
             mask = _get_col(zab("Cesta"), "povrch_p").isin([
                 "zpevněný (nosný terén, štěrk, kalený povrch)",
-                "nedostatečně zpevněný (tráva, hlína, písek, kamení)", "neurčeno", "NULL"]) &                    _get_col(zab("Cesta"), "typcesty_p").isin(["cesta udržovaná"])
+                "nedostatečně zpevněný (tráva, hlína, písek, kamení)", "neurčeno", "NULL"]) & _get_col(zab("Cesta"), "typcesty_p").isin(["cesta udržovaná"])
             pm("sym504", 45, mask, zab("Cesta"))
         else:
             pm("sym504", 45, mask_track_major, gdf_lines)
