@@ -7,7 +7,6 @@ Výsledky se sloučí do finálního PNG a GPKG.
 """
 import os
 import gc
-import re
 import time
 import math
 import tempfile
@@ -28,7 +27,6 @@ from shapely.geometry import box
 from rasterio.features import rasterize
 from rasterio.io import MemoryFile
 
-from .zabaged_wfs import download_zabaged_wfs
 from .processor import (
     load_dmr_grid, load_dmp_grid,
     classify_vegetation, vectorize_rocks,
@@ -42,15 +40,6 @@ from .exporter import OomCollector
 # Max velikost dlaždice v metrech. 1500×1500m při 0.5m pixelu = 9M pixelů = ~700 MB
 TILE_SIZE_M = 1500
 OVERLAP_M = 150   # překryv kvůli artefaktům na hranicích
-
-
-def _normalize_zabaged_key(key: str) -> str:
-    """
-    Normalizuje název souboru ZABAGED na kanonický klíč bez číslic/suffixů na konci.
-    Např. 'SilniceDalnice_1' → 'SilniceDalnice', 'VodniTok2' → 'VodniTok'.
-    """
-    normalized = re.sub(r'[\-_\s]*\d+$', '', key).strip('_- ')
-    return normalized if normalized else key
 
 
 def _compute_tiles(minx, maxx, miny, maxy, tile_size, overlap):
@@ -418,35 +407,9 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
         cb(8, f"Varování OSM: {e}")
 
     # ZABAGED
-    cb(9, "Načítám ZABAGED® data...")
+    cb(9, "Načítám ZABAGED® soubory...")
     zabaged_gdfs = {}
     target_bbox_geom = box(global_minx, global_miny, global_maxx, global_maxy)
-
-    # Automatické stažení přes WFS pokud uživatel zaškrtl checkbox
-    if params.get("download_zabaged", False):
-        cb(9, "Stahuji ZABAGED® přes WFS (ČÚZK)...")
-        try:
-            to_wgs84 = Transformer.from_crs(CURRENT_CRS, "EPSG:4326", always_xy=True)
-            wgs_x1, wgs_y1 = to_wgs84.transform(global_minx, global_miny)
-            wgs_x2, wgs_y2 = to_wgs84.transform(global_maxx, global_maxy)
-            # Přidej buffer 500m aby se ořízly prvky na hranici oblasti
-            buf_deg = 500 / 111320
-            wfs_bbox = (
-                min(wgs_x1, wgs_x2) - buf_deg,
-                min(wgs_y1, wgs_y2) - buf_deg,
-                max(wgs_x1, wgs_x2) + buf_deg,
-                max(wgs_y1, wgs_y2) + buf_deg,
-            )
-            zabaged_gdfs = download_zabaged_wfs(
-                bbox_wgs84=wfs_bbox,
-                target_crs=CURRENT_CRS,
-                progress_cb=lambda msg: cb(9, f"ZABAGED WFS: {msg}"),
-            )
-            cb(9, f"ZABAGED WFS: staženo {len(zabaged_gdfs)} vrstev")
-        except Exception as e:
-            cb(9, f"Varování ZABAGED WFS: {e}")
-
-    # Manuálně nahrané soubory (pokud nejsou WFS data nebo jako doplněk)
     for path in file_paths.get("zabaged", []):
         fname = os.path.basename(path)
         try:
@@ -473,33 +436,15 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
 
             gdf_z = gpd.read_file(path, bbox=file_bbox) if file_bbox else gpd.read_file(path)
 
-            # Přiřadíme CRS pokud soubor nemá .prj
+            # Přiřadíme CRS pokud soubor nemá .prj (gdf_z.crs bude None)
             if gdf_z.crs is None:
                 gdf_z = gdf_z.set_crs(file_crs)
 
             if not gdf_z.empty and gdf_z.crs != crs_dst:
                 gdf_z = gdf_z.to_crs(CURRENT_CRS)
-
-            # Uložíme pod původním klíčem (bez přípony)
             key = fname.rsplit(".", 1)[0]
             zabaged_gdfs[key] = gdf_z
             cb(9, f"ZABAGED OK: {key} — {len(gdf_z)} prvků, CRS={gdf_z.crs}")
-
-            # Uložíme i pod normalizovaným klíčem (bez číslic/suffixů na konci),
-            # aby vector_layers.py našel vrstvu i při nestandardním názvu souboru.
-            normalized = _normalize_zabaged_key(key)
-            if normalized != key:
-                zabaged_gdfs[normalized] = gdf_z
-                cb(9, f"ZABAGED alias: {key} → {normalized}")
-
-            # Uložíme i pod lower-case variantou pro case-insensitive fallback
-            key_lower = key.lower()
-            if key_lower != key:
-                zabaged_gdfs[key_lower] = gdf_z
-            normalized_lower = normalized.lower()
-            if normalized_lower != normalized:
-                zabaged_gdfs[normalized_lower] = gdf_z
-
         except Exception as e:
             cb(9, f"ZABAGED chyba {fname}: {e}")
 
@@ -666,33 +611,59 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
                 col("historic").isin(["memorial", "boundary_stone", "wayside_cross"])])
             collector.collect("sym311", gdf_centroids[col("natural") == "sinkhole"])
 
-        # ZABAGED vrstvy
-        for zab_key, gdf_z in zabaged_gdfs.items():
-            if gdf_z is None or gdf_z.empty:
-                continue
-            # Mapování názvů ZABAGED souborů na ISOM symboly
-            ZAB_MAP = {
-                "SilniceDalnice": "sym502Da", "Cesta": "sym504",
-                "Pesina": "sym506", "ZeleznicniTrat": "sym509a",
-                "VodniTok": "sym305", "VodniPlocha": "sym301",
-                "BudovaJednotlivaNeboBlokBudov": "sym521",
-                "ElektrickeVedeni": "sym510", "Zed": "sym513-1a",
-                "Raseliniste": "sym307", "BazinaMocal": "sym308",
-                "TrvalyTravniPorost": "sym401",
-                "VyznamnyNeboOsamelyStromLesik": "sym417a",
-                "OsamelyBalvanSkalaSkalniSuk": "sym205",
-                "StupenSraz": "sym104", "HradbaValBastaOpevneni": "sym105-1a",
-                "ZdrojPodzemnichVod": "sym312",
-                "MohylaPomnikNahrobek": "sym526a",
-            }
-            sym_key = ZAB_MAP.get(zab_key)
-            if sym_key:
+        # ---------------------------------------------------------------------------
+        # ZABAGED vrstvy — mapování dle Katalogu objektů ZABAGED® v4.6
+        # Klíče odpovídají názvům SHP souborů (název typu objektu bez přípony).
+        # ---------------------------------------------------------------------------
+        ZAB_MAP = {
+            # 2. Komunikace
+            "SilniceDalnice":           "sym502Da",  # 2.01 Silnice, dálnice
+            "Cesta":                    "sym504",     # 2.03 Cesta
+            "Pesina":                   "sym506",     # 2.04 Pěšina
+            "Most":                     "sym512",     # 2.08 Most
+            "ZeleznicniTrat":           "sym509a",    # 2.17 Železniční trať
+
+            # 3. Rozvodné sítě
+            "ElektrickeVedeni":         "sym510",     # 3.03 Elektrické vedení
+
+            # 4. Vodstvo
+            "ZdrojPodzemnichVod":       "sym312",     # 4.01 Zdroj podzemních vod
+            "VodniTok":                 "sym305",     # 4.02 Vodní tok (upřesnění přes atributy)
+            "VodniPlocha":              "sym301",     # 4.10 Vodní plocha
+            "BazinaMocal":              "sym308",     # 4.12 Bažina, močál
+
+            # 1. Sídla, hospodářské a kulturní objekty
+            "BudovaJednotlivaNeboBlokBudov": "sym521",  # 1.02 Budova jednotlivá nebo blok budov
+            "PovrchTezbaLom":           "sym202",     # 1.06 Povrchová těžba, lom
+            "HradbaValBastaOpevneni":   "sym105-1a",  # 1.22 Hradba, val, bašta, opevnění
+            "Zed":                      "sym513-1a",  # 1.23 Zeď
+            "MohylaPomnikNahrobek":     "sym526a",    # 1.20 Mohyla, pomník, náhrobek
+            "RozvalinazRicenina":       "sym523",     # 1.19 Rozvalina, zřícenina
+
+            # 6. Vegetace a povrch
+            "TrvalyTravniPorost":       "sym401",     # 6.06 Trvalý travní porost
+            "LesniPudaSeStromy":        "sym405",     # 6.07 Lesní půda se stromy
+            "LesniPudaSKrovinatymPorostem": "sym411", # 6.08 Lesní půda s křovinatým porostem
+            "Raseliniste":              "sym307",     # 6.14 Rašeliniště
+            "VyznamnyNeboOsamelyStromLesik": "sym417a",  # 6.11 Významný nebo osamělý strom, lesík
+            "LesniPrusek":              "sym508",     # 6.13 Lesní průsek
+
+            # 7. Terénní reliéf
+            "SkalniUtvary":             "sym214",     # 7.06 Skalní útvary
+            "OsamelyBalvanSkalaSkalniSuk": "sym205",  # 7.10 Osamělý balvan, skála, skalní suk
+            "StupeSraz":                "sym104",     # 7.12 Stupeň, sráz
+        }
+
+        for zab_key, sym_key in ZAB_MAP.items():
+            gdf_z = zabaged_gdfs.get(zab_key)
+            if gdf_z is not None and not gdf_z.empty:
                 collector.collect(sym_key, gdf_z)
 
         # ISOM vlastní vrstvy
         for isom_key, gdf_i in isom_gdfs.items():
             if gdf_i is None or gdf_i.empty:
                 continue
+            # Klíč je název souboru = kód ISOM
             clean_key = isom_key.replace(".shp", "").replace(".SHP", "")
             collector.collect(clean_key, gdf_i)
 
