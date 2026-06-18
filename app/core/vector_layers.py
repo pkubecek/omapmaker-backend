@@ -45,8 +45,13 @@ def add_vector_layers(
             if mask is None:
                 return
             if isinstance(mask, (pd.Series, gpd.GeoSeries)):
-                mask = mask.reindex(src_gdf.index).fillna(False)
-            subset = src_gdf[mask].copy()
+                # Resetujeme index masky i src_gdf aby se předešlo
+                # "cannot join with no overlapping index names"
+                gdf_reset = src_gdf.reset_index(drop=True)
+                mask_aligned = mask.reset_index(drop=True).reindex(gdf_reset.index).fillna(False)
+                subset = gdf_reset[mask_aligned].copy()
+            else:
+                subset = src_gdf[mask].copy()
         else:
             subset = src_gdf.copy()
         if subset.empty:
