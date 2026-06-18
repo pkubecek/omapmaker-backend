@@ -38,18 +38,21 @@ def add_vector_layers(
         return
 
     def pm(sym_key, zorder, mask, src_gdf, to_mask=True):
-        """Pomocná: vybere subset a pošle do plot_symbol."""
+        """Pomocná: vybere subset a pošle do plot_symbol.
+
+        Maska z c() má index celého gdf (RangeIndex 0..N).
+        src_gdf je subset (gdf_polys atd.) — sdílí stejný RangeIndex,
+        proto lze použít .loc[mask] přímo bez reindex().
+        """
         if src_gdf is None or src_gdf.empty:
             return
         if to_mask:
             if mask is None:
                 return
             if isinstance(mask, (pd.Series, gpd.GeoSeries)):
-                # Resetujeme index masky i src_gdf aby se předešlo
-                # "cannot join with no overlapping index names"
-                gdf_reset = src_gdf.reset_index(drop=True)
-                mask_aligned = mask.reset_index(drop=True).reindex(gdf_reset.index).fillna(False)
-                subset = gdf_reset[mask_aligned].copy()
+                # Zarovnáme masku na index src_gdf (oba jsou RangeIndex po reset výše)
+                mask_aligned = mask.reindex(src_gdf.index, fill_value=False)
+                subset = src_gdf.loc[mask_aligned[mask_aligned].index].copy()
             else:
                 subset = src_gdf[mask].copy()
         else:
@@ -58,7 +61,12 @@ def add_vector_layers(
             return
         plot_symbol(ax, sym_key, subset, zorder, sym_library, current_crs)
 
-    # Sloupce OSM
+    # Resetujeme index celého gdf jednou — RangeIndex zajistí konzistenci
+    # se sériemi z _c i se geometry subsety (jinak "cannot join with no overlapping index names")
+    if gdf is not None and not gdf.empty:
+        gdf = gdf.reset_index(drop=True)
+
+    # Sloupce OSM — série sdílejí RangeIndex s gdf
     _c = {col: _get_col(gdf, col) for col in [
         "access", "amenity", "barrier", "bridge", "building", "covered",
         "emergency", "geological", "highway", "historic", "intermittent",
@@ -70,11 +78,13 @@ def add_vector_layers(
     def c(col):
         return _c.get(col, pd.Series(dtype=str))
 
-    # Geometry subsets
+    # Geometry subsets — subsety sdílejí RangeIndex s _c, proto masky z c()
+    # lze přímo boolean-indexovat bez nutnosti reindex()
     if gdf is not None and not gdf.empty:
-        gdf_pts = gdf[gdf.geometry.geom_type.isin(["Point"])].copy()
-        gdf_lines = gdf[gdf.geometry.geom_type.isin(["LineString", "MultiLineString"])].copy()
-        gdf_polys = gdf[gdf.geometry.geom_type.isin(["Polygon", "MultiPolygon"])].copy()
+        geom_type = gdf.geometry.geom_type
+        gdf_pts       = gdf[geom_type == "Point"].copy()
+        gdf_lines     = gdf[geom_type.isin(["LineString", "MultiLineString"])].copy()
+        gdf_polys     = gdf[geom_type.isin(["Polygon", "MultiPolygon"])].copy()
         gdf_centroids = gdf.copy()
         gdf_centroids["geometry"] = gdf_centroids.geometry.centroid
     else:
