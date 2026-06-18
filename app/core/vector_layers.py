@@ -160,8 +160,8 @@ def add_vector_layers(
         cgdf = isom("201")
         if cgdf is not None:
             pm("sym201", 57, None, cgdf, to_mask=False)
-        elif zab("SkalniSraz") is not None:
-            pm("sym201", 57, None, zab("SkalniSraz"), to_mask=False)
+        elif zab("SkalniUtvary") is not None:
+            pm("sym201", 57, None, zab("SkalniUtvary"), to_mask=False)
         else:
             pm("sym201", 57,
                c("natural").isin(["cliff"]) & ~c("access").isin(["yes", "permissive"]),
@@ -333,8 +333,8 @@ def add_vector_layers(
         cgdf = isom("309")
         if cgdf is not None:
             pm("sym309", 25, None, cgdf, to_mask=False)
-        elif zab("UzkaBazina") is not None:
-            pm("sym309", 25, None, zab("UzkaBazina"), to_mask=False)
+        elif zab("BazinaMocal") is not None:
+            pm("sym309", 25, None, zab("BazinaMocal"), to_mask=False)
         else:
             pm("sym309", 25,
                (c("natural") == "wetland") & c("waterway").isin(["ditch", "drain"]),
@@ -344,8 +344,8 @@ def add_vector_layers(
         cgdf = isom("310")
         if cgdf is not None:
             pm("sym310", 24, None, cgdf, to_mask=False)
-        elif zab("NezvazitelnaVlhkaPuda") is not None:
-            pm("sym310", 24, None, zab("NezvazitelnaVlhkaPuda"), to_mask=False)
+        elif zab("BazinaMocal") is not None:
+            pm("sym310", 24, None, zab("BazinaMocal"), to_mask=False)
         else:
             pm("sym310", 24,
                (c("natural") == "wetland") & c("wetland").isin(["bog", "fen", "marsh"]),
@@ -355,8 +355,8 @@ def add_vector_layers(
         cgdf = isom("311")
         if cgdf is not None:
             pm("sym311", 52, None, cgdf, to_mask=False)
-        elif zab("StudnaZdroj") is not None:
-            pm("sym311", 52, None, zab("StudnaZdroj"), to_mask=False)
+        elif zab("ZdrojPodzemnichVod") is not None:
+            pm("sym311", 52, None, zab("ZdrojPodzemnichVod"), to_mask=False)
         else:
             pm("sym311", 52,
                c("amenity").isin(["fountain", "water_point", "drinking_water"]) |
@@ -440,8 +440,8 @@ def add_vector_layers(
         cgdf = isom("403")
         if cgdf is not None:
             pm("sym403", 1.0, None, cgdf, to_mask=False)
-        elif zab("TrvalyTravniPorostDrsny") is not None:
-            pm("sym403", 1.0, None, zab("TrvalyTravniPorostDrsny"), to_mask=False)
+        elif zab("TrvalyTravniPorost") is not None:
+            pm("sym403", 1.0, None, zab("TrvalyTravniPorost"), to_mask=False)
         else:
             pm("sym403", 1.0, c("natural").isin(["heath", "fell"]), gdf_polys)
 
@@ -510,8 +510,8 @@ def add_vector_layers(
         cgdf = isom("411")
         if cgdf is not None:
             pm("sym411", 1.8, None, cgdf, to_mask=False)
-        elif zab("HustyPorost") is not None:
-            pm("sym411", 1.8, None, zab("HustyPorost"), to_mask=False)
+        elif zab("LesniPudaSeStromyKategorizovana") is not None:
+            pm("sym411", 1.8, None, zab("LesniPudaSeStromyKategorizovana"), to_mask=False)
 
         # 415 Hranice kultivace
         cgdf = isom("415")
@@ -544,8 +544,8 @@ def add_vector_layers(
         cgdf = isom("501")
         if cgdf is not None:
             pm("sym501", 44, None, cgdf, to_mask=False)
-        elif zab("Parkoviste") is not None:
-            pm("sym501", 44, None, zab("Parkoviste"), to_mask=False)
+        elif zab("ParkovisteOdpocivka") is not None:
+            pm("sym501", 44, None, zab("ParkovisteOdpocivka"), to_mask=False)
         else:
             pm("sym501", 44,
                (c("highway").isin(["pedestrian"]) & (c("area") == "yes")) |
@@ -645,8 +645,8 @@ def add_vector_layers(
         cgdf = isom("508")
         if cgdf is not None:
             pm("sym508", 45, None, cgdf, to_mask=False)
-        elif zab("Proseka") is not None:
-            pm("sym508", 45, None, zab("Proseka"), to_mask=False)
+        elif zab("LesniPrusek") is not None:
+            pm("sym508", 45, None, zab("LesniPrusek"), to_mask=False)
         else:
             pm("sym508", 45,
                c("man_made").isin(["cutline"]) | (c("highway") == "track") & (c("operator") == "forestry"),
@@ -674,8 +674,8 @@ def add_vector_layers(
         cgdf = isom("514")
         if cgdf is not None:
             pm("sym514", 30, None, cgdf, to_mask=False)
-        elif zab("ZbytkyZdi") is not None:
-            pm("sym514", 30, None, zab("ZbytkyZdi"), to_mask=False)
+        elif zab("Zed") is not None:
+            pm("sym514", 30, None, zab("Zed"), to_mask=False)
         else:
             pm("sym514", 30,
                (c("barrier") == "wall") & c("historic").isin(["yes", "ruins"]),
@@ -686,9 +686,9 @@ def add_vector_layers(
         if cgdf is not None:
             for s in ["sym515a", "sym515b"]:
                 pm(s, 30, None, cgdf, to_mask=False)
-        elif zab("NeprekZed") is not None:
+        elif zab("Zed") is not None:
             for s in ["sym515a", "sym515b"]:
-                pm(s, 30, None, zab("NeprekZed"), to_mask=False)
+                pm(s, 30, None, zab("Zed"), to_mask=False)
         else:
             mask_imp_wall = (c("barrier") == "wall") & c("access").isin(["no", "private"])
             pm("sym515a", 30, mask_imp_wall, gdf_lines)
@@ -698,8 +698,8 @@ def add_vector_layers(
         cgdf = isom("516")
         if cgdf is not None:
             pm("sym516", 30, None, cgdf, to_mask=False)
-        elif zab("Ohrada") is not None:
-            pm("sym516", 30, None, zab("Ohrada"), to_mask=False)
+        elif zab("Zed") is not None:
+            pm("sym516", 30, None, zab("Zed"), to_mask=False)
         else:
             pm("sym516", 30,
                c("barrier").isin(["fence", "railing", "wire_fence", "chain_link_fence"]),
@@ -820,8 +820,8 @@ def add_vector_layers(
         cgdf = isom("523")
         if cgdf is not None:
             pm("sym523", 50, None, cgdf, to_mask=False)
-        elif zab("ZbytkyBudovy") is not None:
-            pm("sym523", 50, None, zab("ZbytkyBudovy"), to_mask=False)
+        elif zab("RozvalinaZricenina") is not None:
+            pm("sym523", 50, None, zab("RozvalinaZricenina"), to_mask=False)
         else:
             pm("sym523", 50,
                c("building").isin(["ruins"]) | c("historic").isin(["ruins"]),

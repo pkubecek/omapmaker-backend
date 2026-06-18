@@ -1,14 +1,9 @@
 """
 zabaged_wfs.py — stahování ZABAGED® dat přes ArcGIS REST API (ČÚZK).
 
-Endpoint: https://ags.cuzk.gov.cz/arcgis/rest/services/ZABAGED_POLOHOPIS/MapServer/{layerId}/query
-- Zdarma, bez registrace
-- Žádná diakritika v URL — používá číselné ID vrstev
-- bbox v EPSG:5514, výstup GeoJSON
-- Paginace přes resultOffset (max 2000 prvků na request)
-
 Layer ID ověřena z:
 https://ags.cuzk.gov.cz/arcgis/rest/services/ZABAGED_POLOHOPIS/MapServer
+Klíče odpovídají názvům používaným v OMapMaker_v7.py.
 """
 import time
 import requests
@@ -21,40 +16,48 @@ PAGE_SIZE = 2000
 MAX_RETRIES = 3
 RETRY_DELAY = 3
 
-# Mapování klíčů pipeline → layer ID v MapServeru (ověřeno z REST API)
 ZABAGED_LAYERS = {
     # Terénní reliéf
-    "OsamelyBalvanSkalaSkalniSuk":   10,   # Osamělý balvan, skála, skalní suk (bod)
-    "SkalniUtvary":                  130,  # Skalní útvary (plocha)
+    "OsamelyBalvanSkalaSkalniSuk":   10,   # Osamělý balvan, skála, skalní suk
+    "VstupDoJeskyne":                11,   # Vstup do jeskyně
+    "SkupinaBalvanu_b":              12,   # Skupina balvanů (bod)
     "StupenSraz":                    95,   # Stupeň, sráz
     "RokleVymol":                    94,   # Rokle, výmol
+    "SkalniUtvary":                  130,  # Skalní útvary
 
     # Vegetace
     "VyznamnyNeboOsamelyStromLesik": 14,   # Významný nebo osamělý strom, lesík
+    "LiniovaVegetace":               15,   # Liniová vegetace
     "LesniPrusek":                   16,   # Lesní průsek
     "Raseliniste":                   18,   # Rašeliniště (plocha)
     "TrvalyTravniPorost":            141,  # Trvalý travní porost
-    "LesniPozemek":                  143,  # Lesní půda se stromy (plocha)
-    "HustyPorost":                   144,  # Lesní půda se stromy kategorizovaná
-    "OrnaPudaAOstatniDaleNespecifikovanePlochy": 142,  # Orná půda a ostatní plochy
+    "LesniPozemek":                  143,  # Lesní půda se stromy
+    "LesniPudaSeStromyKategorizovana": 144, # Lesní půda se stromy kategorizovaná
+    "OrnaPudaAOstatniDaleNespecifikovanePlochy": 142, # Orná půda a ostatní plochy
+    "OkrasnaZahradaPark":            134,  # Udržovaná zeleň (parky, okrasné zahrady)
     "OvocnySadZahrada":              135,  # Ovocný sad, zahrada
     "Vinice":                        136,  # Vinice
-    "UdrzovanaZelen":                134,  # Udržovaná zeleň
 
     # Vodstvo
     "ZdrojPodzemnichVod":            19,   # Zdroj podzemních vod
+    "NasupisteHraze":                22,   # Přehradní hráz, jez
     "VodniTok":                      93,   # Vodní tok
     "VodniPlocha":                   132,  # Vodní plocha
     "BazinaMocal":                   131,  # Bažina, močál
-    "NasupisteHraze":                22,   # Přehradní hráz, jez
 
     # Komunikace
     "SilniceDalnice":                79,   # Silnice, dálnice
-    "Cesta":                         83,   # Cesta
+    "SilniceNeevidovana":            80,   # Silnice neevidovaná
+    "SilniceVeVastavbe":             81,   # Silnice ve výstavbě
     "Pesina":                        82,   # Pěšina
+    "Cesta":                         83,   # Cesta
+    "Ulice":                         84,   # Ulice
     "Most":                          73,   # Most
+    "Lavka":                         67,   # Lávka (linie)
     "ZeleznicniTrat":                75,   # Železniční trať
-    "Parkoviste":                    123,  # Parkoviště, odpočívka
+    "LanovaDrahaLyzarskyVlek":       72,   # Lanová dráha, lyžařský vlek
+    "LyzarskyMustek":                41,   # Lyžařský můstek
+    "ParkovisteOdpocivka":           123,  # Parkoviště, odpočívka
 
     # Rozvodné sítě
     "ElektrickeVedeni":              88,   # Elektrické vedení
@@ -64,16 +67,18 @@ ZABAGED_LAYERS = {
     "HradbaValBastaOpevneni":        38,   # Hradba, val, bašta, opevnění
     "Zed":                           39,   # Zeď
     "MohylaPomnikNahrobek":          25,   # Mohyla, pomník, náhrobek
-    "ZbytkyBudovy":                  103,  # Rozvalina, zřícenina
+    "KrizSloupKulturnihoVyznamu":    24,   # Kříž, sloup kulturního významu
+    "RozvalinaZricenina":            103,  # Rozvalina, zřícenina
+    "Bunkr":                         37,   # Bunkr
     "PovrchTezbaLom":                118,  # Povrchová těžba, lom
-    "Ohrada":                        54,   # Zábrana (plot, ohrada)
+    "ArealUceloveZastavby":          114,  # Areál účelové zástavby
     "Hrbitov":                       116,  # Hřbitov
+    "Skladka":                       117,  # Skládka
 }
 
 
 def _fetch_page(layer_id: int, bbox_5514: tuple, offset: int,
                 progress_cb=None) -> dict | None:
-    """Stáhne jednu stránku přes ArcGIS REST /query endpoint."""
     minx, miny, maxx, maxy = bbox_5514
     url = f"{REST_BASE}/{layer_id}/query"
     params = {
@@ -88,7 +93,6 @@ def _fetch_page(layer_id: int, bbox_5514: tuple, offset: int,
         "resultOffset": offset,
         "resultRecordCount": PAGE_SIZE,
     }
-
     for attempt in range(MAX_RETRIES):
         try:
             resp = requests.get(url, params=params, timeout=60)
@@ -109,44 +113,35 @@ def _fetch_page(layer_id: int, bbox_5514: tuple, offset: int,
 
 def _download_layer(key: str, layer_id: int, bbox_5514: tuple,
                     target_crs: str, progress_cb=None) -> gpd.GeoDataFrame | None:
-    """Stáhne celou vrstvu s paginací."""
     frames = []
     offset = 0
-
     while True:
         data = _fetch_page(layer_id, bbox_5514, offset, progress_cb)
         if data is None:
             break
-
         features = data.get("features", [])
         if not features:
             break
-
         try:
             gdf_page = gpd.GeoDataFrame.from_features(features, crs="EPSG:5514")
             frames.append(gdf_page)
         except Exception as e:
             print(f"[zabaged] Parse chyba {key} @{offset}: {e}")
             break
-
         if progress_cb:
             progress_cb(f"  {key}: {offset + len(features)} prvků")
-
         if not data.get("exceededTransferLimit", False):
             break
         offset += PAGE_SIZE
 
     if not frames:
         return None
-
     gdf = gpd.GeoDataFrame(pd.concat(frames, ignore_index=True), crs="EPSG:5514")
-
     if target_crs and target_crs != "EPSG:5514":
         try:
             gdf = gdf.to_crs(target_crs)
         except Exception as e:
             print(f"[zabaged] CRS převod {key}: {e}")
-
     return gdf if not gdf.empty else None
 
 
@@ -157,12 +152,7 @@ def download_zabaged_wfs(
 ) -> dict:
     """
     Stáhne ZABAGED vrstvy pro daný bbox přes ArcGIS REST API.
-
     bbox_wgs84: (min_lon, min_lat, max_lon, max_lat) — WGS84
-    target_crs: cílový CRS výsledných GeoDataFrames
-    progress_cb: volitelná funkce(msg: str)
-
-    Vrací: dict { klíč: GeoDataFrame }
     """
     def cb(msg):
         print(f"[zabaged] {msg}")
@@ -180,7 +170,6 @@ def download_zabaged_wfs(
         bbox_5514 = (min_lon, min_lat, max_lon, max_lat)
 
     cb(f"Stahuji ZABAGED REST bbox={bbox_5514}")
-
     result = {}
     total = len(ZABAGED_LAYERS)
 
