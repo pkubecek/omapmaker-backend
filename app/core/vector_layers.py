@@ -864,7 +864,8 @@ def add_vector_layers(
         # 531 Výrazný bodový prvek – křížek (sym531 = prominent feature X)
         cgdf = isom("531")
         if cgdf is not None:
-            pm("sym531", 56, None, cgdf, to_mask=False)
+            pm("sym531", 56, c("artwork_type").isin(["statue"]),
+               gdf_pts)
 
         # 532 Schody (stairway – tři vrstvy: obrys, výplň, příčky)
         cgdf = isom("532")

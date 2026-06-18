@@ -241,6 +241,7 @@ def _plot_with_ticks(ax, gdf, sym_props, zorder):
     tick_space = float(sym_props.pop("tick_spacing", 4))
     tick_width = float(sym_props.pop("tick_linewidth", 0.3))
     tick_color = sym_props.pop("tick_color", sym_props.get("color", "black"))
+    tick_angle = float(sym_props.pop("tick_angle", 90))  # stupně od tangenty; 90=kolmé, 45=šikmé
     _strip_custom_keys(sym_props)
     gdf.plot(ax=ax, zorder=zorder, **sym_props)
 
@@ -265,8 +266,16 @@ def _plot_with_ticks(ax, gdf, sym_props, zorder):
                 if tan_len == 0:
                     continue
                 tx, ty = dx / tan_len, dy / tan_len
-                n1x, n1y = ty, -tx
-                ticks.append([(pt.x, pt.y), (pt.x + n1x * tick_len, pt.y + n1y * tick_len)])
+                # tick_angle: úhel fousku od tangenty linie (stupně)
+                # 90 = kolmé na linii (cliff), 45 = šikmé pod 45° (fence)
+                # Rotace tangenty doprava o (90 - tick_angle):
+                #   0° → fousky rovnoběžné s linií (nesmysl)
+                #  45° → šikmé fousky pro plot
+                #  90° → kolmé fousky pro srázy
+                a = np.radians(90 - tick_angle)
+                rot_x =  tx * np.cos(a) + ty * np.sin(a)
+                rot_y = -tx * np.sin(a) + ty * np.cos(a)
+                ticks.append([(pt.x, pt.y), (pt.x + rot_x * tick_len, pt.y + rot_y * tick_len)])
     if ticks:
         lc = LineCollection(ticks, colors=tick_color, linewidths=tick_width, zorder=zorder)
         ax.add_collection(lc)

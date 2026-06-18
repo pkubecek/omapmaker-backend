@@ -507,19 +507,19 @@
     <!-- 516: Fence -->
     <symbol id="sym516" type="line">
         <style color="#000000" linewidth="0.42525" linestyle="solid" />
-        <style_ticks length="3" spacing="4.2525" linewidth="0.42525" color="#000000" />
+        <style_ticks length="3" spacing="4.2525" linewidth="0.42525" color="#000000" angle="45" />
     </symbol>
 
     <!-- 517: Ruined fence -->
     <symbol id="sym517" type="line">
         <style color="#000000" linewidth="0.42525" linestyle="(0, (4.2525, 2.12625))" />
-        <style_ticks length="2" spacing="6.3789" linewidth="0.42525" color="#000000" />
+        <style_ticks length="2" spacing="6.3789" linewidth="0.42525" color="#000000" angle="45" />
     </symbol>
 
     <!-- 518: Impassable fence -->
     <symbol id="sym518" type="line">
         <style color="#000000" linewidth="0.76545" linestyle="solid" />
-        <style_ticks length="4" spacing="4.2525" linewidth="0.59535" color="#000000" />
+        <style_ticks length="4" spacing="4.2525" linewidth="0.59535" color="#000000" angle="45" />
     </symbol>
 
     <!-- 519: Crossing point (opening in fence/wall) -->
