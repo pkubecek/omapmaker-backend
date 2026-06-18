@@ -38,23 +38,15 @@ def add_vector_layers(
         return
 
     def pm(sym_key, zorder, mask, src_gdf, to_mask=True):
-        """Pomocná: vybere subset a pošle do plot_symbol.
-
-        Maska z c() má index celého gdf (RangeIndex 0..N).
-        src_gdf je subset (gdf_polys atd.) — sdílí stejný RangeIndex,
-        proto lze použít .loc[mask] přímo bez reindex().
-        """
+        """Pomocná: vybere subset a pošle do plot_symbol."""
         if src_gdf is None or src_gdf.empty:
             return
         if to_mask:
             if mask is None:
                 return
             if isinstance(mask, (pd.Series, gpd.GeoSeries)):
-                # Zarovnáme masku na index src_gdf (oba jsou RangeIndex po reset výše)
-                mask_aligned = mask.reindex(src_gdf.index, fill_value=False)
-                subset = src_gdf.loc[mask_aligned[mask_aligned].index].copy()
-            else:
-                subset = src_gdf[mask].copy()
+                mask = mask.reindex(src_gdf.index).fillna(False)
+            subset = src_gdf[mask].copy()
         else:
             subset = src_gdf.copy()
         if subset.empty:
