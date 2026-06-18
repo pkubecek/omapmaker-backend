@@ -430,7 +430,11 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
             gdf_z = gpd.read_file(path, bbox=file_bbox) if file_bbox else gpd.read_file(path)
             if not gdf_z.empty:
                 gdf_z = gdf_z.to_crs(CURRENT_CRS)
-            zabaged_gdfs[fname.rsplit(".", 1)[0]] = gdf_z
+            # Klíč bez přípony — ukládáme pod původním názvem i pod
+            # normalizovaným (bez číslic na konci, bez podtržítek) aby
+            # vector_layers.py mohl najít vrstvu bez ohledu na přesný název souboru.
+            key = fname.rsplit(".", 1)[0]
+            zabaged_gdfs[key] = gdf_z
         except Exception as e:
             print(f"[pipeline] ZABAGED {fname}: {e}")
 

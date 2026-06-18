@@ -346,21 +346,22 @@ def render_map(
             plot_symbol(ax, "sym109", kno_gdf, 21, sym_library, current_crs)
 
     # Vektorové vrstvy (OSM + ZABAGED + ISOM)
+    # Volá se vždy — add_vector_layers si poradí s prázdným gdf_osm,
+    # ZABAGED a ISOM data se zpracují i bez OSM.
     _cb("Kreslím OSM a ZABAGED® data...")
-    if gdf_osm is not None and not gdf_osm.empty:
-        add_vector_layers(
-            ax=ax,
-            gdf=gdf_osm,
-            extent=map_extent,
-            zabaged_gdfs=zabaged_gdfs,
-            dmr_grid=dmr_grid_linear,
-            grid_x=grid_x,
-            grid_y=grid_y,
-            visibility=layer_visibility,
-            isom_gdfs=isom_gdfs,
-            sym_library=sym_library,
-            current_crs=current_crs,
-        )
+    add_vector_layers(
+        ax=ax,
+        gdf=gdf_osm,
+        extent=map_extent,
+        zabaged_gdfs=zabaged_gdfs,
+        dmr_grid=dmr_grid_linear,
+        grid_x=grid_x,
+        grid_y=grid_y,
+        visibility=layer_visibility,
+        isom_gdfs=isom_gdfs,
+        sym_library=sym_library,
+        current_crs=current_crs,
+    )
 
     # Uložení PNG
     _cb("Ukládám PNG (1000 DPI)...")
