@@ -118,12 +118,12 @@ def add_vector_layers(
             cgdf = isom(code)
             if cgdf is not None:
                 pm(sym, zo, None, cgdf, to_mask=False)
-            elif code == "104" and zab("StupenSraz"):
+            elif code == "104" and zab("StupenSraz") is not None:
                 pm("sym104", zo, None, zab("StupenSraz"), to_mask=False)
             elif code == "104":
                 pm("sym104", zo, c("man_made") == "embankment", gdf_lines)
 
-        if isom("105") is None and zab("HradbaValBastaOpevneni"):
+        if isom("105") is None and zab("HradbaValBastaOpevneni") is not None:
             for s in ["sym105-1a", "sym105-1b"]:
                 pm(s, 30, None, zab("HradbaValBastaOpevneni"), to_mask=False)
 
@@ -190,7 +190,7 @@ def add_vector_layers(
             if cgdf is not None:
                 pm(sym, zo, None, cgdf, to_mask=False)
 
-        if isom("205") is None and zab("OsamelyBalvanSkalaSkalniSuk"):
+        if isom("205") is None and zab("OsamelyBalvanSkalaSkalniSuk") is not None:
             pm("sym205", 56, None, zab("OsamelyBalvanSkalaSkalniSuk"), to_mask=False)
         elif isom("205") is None:
             pm("sym205", 56, c("natural").isin(["stone", "rock"]), gdf_centroids)
@@ -284,12 +284,12 @@ def add_vector_layers(
             if cgdf is not None:
                 pm(sym, zo, None, cgdf, to_mask=False)
 
-        if isom("307") is None and zab("Raseliniste"):
+        if isom("307") is None and zab("Raseliniste") is not None:
             pm("sym307", 25, None, zab("Raseliniste"), to_mask=False)
         elif isom("307") is None:
             pm("sym307", 25, c("wetland") == "reedbed", gdf_polys)
 
-        if isom("308") is None and zab("BazinaMocal"):
+        if isom("308") is None and zab("BazinaMocal") is not None:
             pm("sym308", 25, None, zab("BazinaMocal"), to_mask=False)
         elif isom("308") is None:
             pm("sym308", 25, c("natural") == "wetland", gdf_polys)
@@ -384,14 +384,14 @@ def add_vector_layers(
             if cgdf is not None:
                 pm(sym, zo, None, cgdf, to_mask=False)
 
-        if isom("401") is None and zab("TrvalyTravniPorost"):
+        if isom("401") is None and zab("TrvalyTravniPorost") is not None:
             pm("sym401", 1.0, None, zab("TrvalyTravniPorost"), to_mask=False)
         elif isom("401") is None:
             pm("sym401", 1.0,
                c("landuse").isin(["grassland", "grass", "meadow"]) | c("natural").isin(["grassland"]),
                gdf_polys)
 
-        if isom("412") is None and zab("OrnaPudaAOstatniDaleNespecifikovanePlochy"):
+        if isom("412") is None and zab("OrnaPudaAOstatniDaleNespecifikovanePlochy") is not None:
             mask = _get_col(zab("OrnaPudaAOstatniDaleNespecifikovanePlochy"), "typ_pudy_p").isin(["orná půda"])
             pm("sym412a", 1.9, mask, zab("OrnaPudaAOstatniDaleNespecifikovanePlochy"))
         elif isom("412") is None:
@@ -436,7 +436,7 @@ def add_vector_layers(
         if cgdf is not None:
             pm("sym419", 56, None, cgdf, to_mask=False)
 
-        if isom("417") is None and zab("VyznamnyNeboOsamelyStromLesik"):
+        if isom("417") is None and zab("VyznamnyNeboOsamelyStromLesik") is not None:
             pm("sym417a", 54, None, zab("VyznamnyNeboOsamelyStromLesik"), to_mask=False)
             pm("sym417b", 55, None, zab("VyznamnyNeboOsamelyStromLesik"), to_mask=False)
         elif isom("417") is None:
