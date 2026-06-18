@@ -613,45 +613,49 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
 
         # ---------------------------------------------------------------------------
         # ZABAGED vrstvy — mapování dle Katalogu objektů ZABAGED® v4.6
-        # Klíče odpovídají názvům SHP souborů (název typu objektu bez přípony).
+        # Obsahuje jak nové katalogové názvy, tak staré názvy pro zpětnou
+        # kompatibilitu (uživatelé mohou mít soubory pojmenované oběma způsoby).
         # ---------------------------------------------------------------------------
         ZAB_MAP = {
             # 2. Komunikace
-            "SilniceDalnice":           "sym502Da",  # 2.01 Silnice, dálnice
-            "Cesta":                    "sym504",     # 2.03 Cesta
-            "Pesina":                   "sym506",     # 2.04 Pěšina
-            "Most":                     "sym512",     # 2.08 Most
-            "ZeleznicniTrat":           "sym509a",    # 2.17 Železniční trať
-
+            "SilniceDalnice":           "sym502Da",  # 2.01
+            "Cesta":                    "sym504",     # 2.03
+            "Pesina":                   "sym506",     # 2.04
+            "Most":                     "sym512",     # 2.08
+            "ZeleznicniTrat":           "sym509a",    # 2.17
             # 3. Rozvodné sítě
-            "ElektrickeVedeni":         "sym510",     # 3.03 Elektrické vedení
-
+            "ElektrickeVedeni":         "sym510",     # 3.03
             # 4. Vodstvo
-            "ZdrojPodzemnichVod":       "sym312",     # 4.01 Zdroj podzemních vod
-            "VodniTok":                 "sym305",     # 4.02 Vodní tok (upřesnění přes atributy)
-            "VodniPlocha":              "sym301",     # 4.10 Vodní plocha
-            "BazinaMocal":              "sym308",     # 4.12 Bažina, močál
-
-            # 1. Sídla, hospodářské a kulturní objekty
-            "BudovaJednotlivaNeboBlokBudov": "sym521",  # 1.02 Budova jednotlivá nebo blok budov
-            "PovrchTezbaLom":           "sym202",     # 1.06 Povrchová těžba, lom
-            "HradbaValBastaOpevneni":   "sym105-1a",  # 1.22 Hradba, val, bašta, opevnění
-            "Zed":                      "sym513-1a",  # 1.23 Zeď
-            "MohylaPomnikNahrobek":     "sym526a",    # 1.20 Mohyla, pomník, náhrobek
-            "RozvalinazRicenina":       "sym523",     # 1.19 Rozvalina, zřícenina
-
-            # 6. Vegetace a povrch
-            "TrvalyTravniPorost":       "sym401",     # 6.06 Trvalý travní porost
-            "LesniPudaSeStromy":        "sym405",     # 6.07 Lesní půda se stromy
-            "LesniPudaSKrovinatymPorostem": "sym411", # 6.08 Lesní půda s křovinatým porostem
-            "Raseliniste":              "sym307",     # 6.14 Rašeliniště
-            "VyznamnyNeboOsamelyStromLesik": "sym417a",  # 6.11 Významný nebo osamělý strom, lesík
-            "LesniPrusek":              "sym508",     # 6.13 Lesní průsek
-
+            "ZdrojPodzemnichVod":       "sym312",     # 4.01
+            "VodniTok":                 "sym305",     # 4.02
+            "VodniPlocha":              "sym301",     # 4.10
+            "BazinaMocal":              "sym308",     # 4.12
+            # 1. Sídla
+            "BudovaJednotlivaNeboBlokBudov": "sym521",  # 1.02
+            "PovrchTezbaLom":           "sym202",     # 1.06 (nový název)
+            "Lom":                      "sym202",     # 1.06 (starý název)
+            "HradbaValBastaOpevneni":   "sym105-1a",  # 1.22
+            "Zed":                      "sym513-1a",  # 1.23
+            "MohylaPomnikNahrobek":     "sym526a",    # 1.20
+            "RozvalinazRicenina":       "sym523",     # 1.19 (nový název)
+            "ZbytkyBudovy":             "sym523",     # 1.19 (starý název)
+            # 6. Vegetace
+            "TrvalyTravniPorost":       "sym401",     # 6.06
+            "LesniPudaSeStromy":        "sym405",     # 6.07 (nový název)
+            "LesniPozemek":             "sym405",     # 6.07 (starý název)
+            "LesniPudaSKrovinatymPorostem": "sym411", # 6.08 (nový název)
+            "HustyPorost":              "sym411",     # 6.08 (starý název)
+            "Raseliniste":              "sym307",     # 6.14
+            "VyznamnyNeboOsamelyStromLesik": "sym417a",  # 6.11
+            "LesniPrusek":              "sym508",     # 6.13 (nový název)
+            "Proseka":                  "sym508",     # 6.13 (starý název)
             # 7. Terénní reliéf
-            "SkalniUtvary":             "sym214",     # 7.06 Skalní útvary
-            "OsamelyBalvanSkalaSkalniSuk": "sym205",  # 7.10 Osamělý balvan, skála, skalní suk
-            "StupeSraz":                "sym104",     # 7.12 Stupeň, sráz
+            "SkalniUtvary":             "sym214",     # 7.06 (nový název)
+            "SkalniUtvar":              "sym214",     # 7.06 (starý název)
+            "OsamelyBalvanSkalaSkalniSuk": "sym205",  # 7.10
+            "StupeSraz":                "sym104",     # 7.12 (nový název)
+            "StupenSraz":               "sym104",     # 7.12 (varianta)
+            "SkalniSraz":               "sym201",     # původně jako skála
         }
 
         for zab_key, sym_key in ZAB_MAP.items():

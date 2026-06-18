@@ -130,9 +130,40 @@ def add_vector_layers(
     else:
         gdf_pts = gdf_lines = gdf_polys = gdf_centroids = gpd.GeoDataFrame()
 
+    # Aliasy: starý název souboru → nový katalogový název (a naopak).
+    # Zajistí zpětnou kompatibilitu bez ohledu na to, jak uživatel soubory pojmenoval.
+    _ZAB_ALIASES = {
+        # starý název          : nový katalogový název (ZABAGED® v4.6)
+        "StupenSraz":            "StupeSraz",
+        "SkalniSraz":            "StupeSraz",       # dříve chybně pojmenováno
+        "Lom":                   "PovrchTezbaLom",
+        "LesniPozemek":          "LesniPudaSeStromy",
+        "SkalniUtvar":           "SkalniUtvary",
+        "HustyPorost":           "LesniPudaSKrovinatymPorostem",
+        "Proseka":               "LesniPrusek",
+        "ZbytkyBudovy":          "RozvalinazRicenina",
+        "StudnaZdroj":           "ZdrojPodzemnichVod",
+        "OrnaPudaAOstatniDaleNespecifikovanePlochy": "OrnaPuda",  # fallback
+    }
+
     def zab(key):
-        """Vrátí ZABAGED® GDF podle klíče (název SHP souboru bez přípony)."""
-        return zabaged_gdfs.get(key)
+        """Vrátí ZABAGED® GDF podle klíče — zkouší přesný název i aliasy."""
+        gdf = zabaged_gdfs.get(key)
+        if gdf is not None:
+            return gdf
+        # Zkus alias: starý → nový
+        alias = _ZAB_ALIASES.get(key)
+        if alias:
+            gdf = zabaged_gdfs.get(alias)
+            if gdf is not None:
+                return gdf
+        # Zkus alias: nový → starý (reverzní)
+        for old, new in _ZAB_ALIASES.items():
+            if new == key:
+                gdf = zabaged_gdfs.get(old)
+                if gdf is not None:
+                    return gdf
+        return None
 
     def isom(key):
         return isom_gdfs.get(key)
