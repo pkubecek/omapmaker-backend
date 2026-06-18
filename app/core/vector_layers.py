@@ -506,12 +506,6 @@ def add_vector_layers(
         if cgdf is not None:
             pm("sym410", 1.7, None, cgdf, to_mask=False)
 
-        # 411 Vegetace: neprostupná
-        cgdf = isom("411")
-        if cgdf is not None:
-            pm("sym411", 1.8, None, cgdf, to_mask=False)
-        elif zab("LesniPudaSeStromyKategorizovana") is not None:
-            pm("sym411", 1.8, None, zab("LesniPudaSeStromyKategorizovana"), to_mask=False)
 
         # 415 Hranice kultivace
         cgdf = isom("415")
