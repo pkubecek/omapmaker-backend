@@ -6,6 +6,9 @@ Endpoint: https://ags.cuzk.gov.cz/arcgis/rest/services/ZABAGED_POLOHOPIS/MapServ
 - Žádná diakritika v URL — používá číselné ID vrstev
 - bbox v EPSG:5514, výstup GeoJSON
 - Paginace přes resultOffset (max 2000 prvků na request)
+
+Layer ID ověřena z:
+https://ags.cuzk.gov.cz/arcgis/rest/services/ZABAGED_POLOHOPIS/MapServer
 """
 import time
 import requests
@@ -14,39 +17,57 @@ import pandas as pd
 from pyproj import Transformer
 
 REST_BASE = "https://ags.cuzk.gov.cz/arcgis/rest/services/ZABAGED_POLOHOPIS/MapServer"
-PAGE_SIZE = 2000   # MaxRecordCount vrstev je 2000
+PAGE_SIZE = 2000
 MAX_RETRIES = 3
 RETRY_DELAY = 3
 
-# Mapování klíčů pipeline → layer ID v MapServeru
-# ID zjištěna z https://ags.cuzk.gov.cz/arcgis/rest/services/ZABAGED_POLOHOPIS/MapServer
+# Mapování klíčů pipeline → layer ID v MapServeru (ověřeno z REST API)
 ZABAGED_LAYERS = {
+    # Terénní reliéf
+    "OsamelyBalvanSkalaSkalniSuk":   10,   # Osamělý balvan, skála, skalní suk (bod)
+    "SkalniUtvary":                  130,  # Skalní útvary (plocha)
+    "StupenSraz":                    95,   # Stupeň, sráz
+    "RokleVymol":                    94,   # Rokle, výmol
+
+    # Vegetace
+    "VyznamnyNeboOsamelyStromLesik": 14,   # Významný nebo osamělý strom, lesík
+    "LesniPrusek":                   16,   # Lesní průsek
+    "Raseliniste":                   18,   # Rašeliniště (plocha)
+    "TrvalyTravniPorost":            141,  # Trvalý travní porost
+    "LesniPozemek":                  143,  # Lesní půda se stromy (plocha)
+    "HustyPorost":                   144,  # Lesní půda se stromy kategorizovaná
+    "OrnaPudaAOstatniDaleNespecifikovanePlochy": 142,  # Orná půda a ostatní plochy
+    "OvocnySadZahrada":              135,  # Ovocný sad, zahrada
+    "Vinice":                        136,  # Vinice
+    "UdrzovanaZelen":                134,  # Udržovaná zeleň
+
+    # Vodstvo
+    "ZdrojPodzemnichVod":            19,   # Zdroj podzemních vod
+    "VodniTok":                      93,   # Vodní tok
+    "VodniPlocha":                   132,  # Vodní plocha
+    "BazinaMocal":                   131,  # Bažina, močál
+    "NasupisteHraze":                22,   # Přehradní hráz, jez
+
+    # Komunikace
     "SilniceDalnice":                79,   # Silnice, dálnice
     "Cesta":                         83,   # Cesta
     "Pesina":                        82,   # Pěšina
-    "ZeleznicniTrat":                75,   # Železniční trať
-    "VodniTok":                      93,   # Vodní tok
-    "VodniPlocha":                   132,  # Vodní plocha
-    "ElektrickeVedeni":              88,   # Elektrické vedení
-    "Zed":                           39,   # Zeď
-    "Raseliniste":                   18,   # Rašeliniště (plocha)
-    "BazinaMocal":                   131,  # Bažina, močál
-    "TrvalyTravniPorost":            141,  # Trvalý travní porost
-    "VyznamnyNeboOsamelyStromLesik": 14,   # Významný nebo osamělý strom, lesík
-    "OsamelyBalvanSkalaSkalniSuk":   10,   # Osamělý balvan, skála, skalní suk
-    "StupenSraz":                    95,   # Stupeň, sráz
-    "HradbaValBastaOpevneni":        38,   # Hradba, val, bašta, opevnění
-    "ZdrojPodzemnichVod":            19,   # Zdroj podzemních vod
-    "MohylaPomnikNahrobek":          25,   # Mohyla, pomník, náhrobek
-    "LesniPozemek":                  143,  # Lesní půda se stromy (plocha)
-    "SkalniSraz":                    130,  # Skalní útvary
     "Most":                          73,   # Most
-    "Ohrada":                        54,   # Zábrana (plot/ohrada)
-    "Krmitko":                       None, # Krmítko — není v MapServeru, přeskočit
-    "Proseka":                       16,   # Lesní průsek
-    "NasupisteHraze":                22,   # Přehradní hráz, jez (nejbližší ekvivalent)
-    "HustyPorost":                   144,  # Lesní půda se stromy kategorizovaná
-    "OrnaPudaAOstatniDaleNespecifikovanePlochy": 142,  # Orná půda a ostatní plochy
+    "ZeleznicniTrat":                75,   # Železniční trať
+    "Parkoviste":                    123,  # Parkoviště, odpočívka
+
+    # Rozvodné sítě
+    "ElektrickeVedeni":              88,   # Elektrické vedení
+
+    # Sídla, hospodářské a kulturní objekty
+    "BudovaJednotlivaNeboBlokBudov": 99,   # Budova jednotlivá nebo blok budov (plocha)
+    "HradbaValBastaOpevneni":        38,   # Hradba, val, bašta, opevnění
+    "Zed":                           39,   # Zeď
+    "MohylaPomnikNahrobek":          25,   # Mohyla, pomník, náhrobek
+    "ZbytkyBudovy":                  103,  # Rozvalina, zřícenina
+    "PovrchTezbaLom":                118,  # Povrchová těžba, lom
+    "Ohrada":                        54,   # Zábrana (plot, ohrada)
+    "Hrbitov":                       116,  # Hřbitov
 }
 
 
@@ -73,7 +94,6 @@ def _fetch_page(layer_id: int, bbox_5514: tuple, offset: int,
             resp = requests.get(url, params=params, timeout=60)
             resp.raise_for_status()
             data = resp.json()
-            # ArcGIS REST vrátí error jako JSON s polem "error"
             if "error" in data:
                 raise ValueError(f"ArcGIS error: {data['error']}")
             return data
@@ -112,7 +132,6 @@ def _download_layer(key: str, layer_id: int, bbox_5514: tuple,
         if progress_cb:
             progress_cb(f"  {key}: {offset + len(features)} prvků")
 
-        # ArcGIS REST vrátí exceededTransferLimit=true pokud jsou další záznamy
         if not data.get("exceededTransferLimit", False):
             break
         offset += PAGE_SIZE
@@ -137,7 +156,7 @@ def download_zabaged_wfs(
     progress_cb=None,
 ) -> dict:
     """
-    Stáhne všechny ZABAGED vrstvy (bez budov) pro daný bbox.
+    Stáhne ZABAGED vrstvy pro daný bbox přes ArcGIS REST API.
 
     bbox_wgs84: (min_lon, min_lat, max_lon, max_lat) — WGS84
     target_crs: cílový CRS výsledných GeoDataFrames
@@ -150,7 +169,6 @@ def download_zabaged_wfs(
         if progress_cb:
             progress_cb(msg)
 
-    # Převod bbox z WGS84 do EPSG:5514
     min_lon, min_lat, max_lon, max_lat = bbox_wgs84
     try:
         t = Transformer.from_crs("EPSG:4326", "EPSG:5514", always_xy=True)
@@ -164,10 +182,9 @@ def download_zabaged_wfs(
     cb(f"Stahuji ZABAGED REST bbox={bbox_5514}")
 
     result = {}
-    layers = {k: v for k, v in ZABAGED_LAYERS.items() if v is not None}
-    total = len(layers)
+    total = len(ZABAGED_LAYERS)
 
-    for i, (key, layer_id) in enumerate(layers.items(), 1):
+    for i, (key, layer_id) in enumerate(ZABAGED_LAYERS.items(), 1):
         cb(f"[{i}/{total}] {key} (layer {layer_id})...")
         try:
             gdf = _download_layer(key, layer_id, bbox_5514, target_crs, cb)
