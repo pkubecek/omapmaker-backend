@@ -47,6 +47,8 @@ def add_vector_layers(
     if (gdf is None or gdf.empty) and not zabaged_gdfs and not isom_gdfs:
         return
 
+    _CLIFF_SYMS = {"sym104", "sym201", "sym202"}
+
     def pm(sym_key, zorder, mask, src_gdf, to_mask=True):
         if src_gdf is None or src_gdf.empty:
             return
@@ -60,7 +62,12 @@ def add_vector_layers(
             subset = src_gdf.copy()
         if subset.empty:
             return
-        plot_symbol(ax, sym_key, subset, zorder, sym_library, current_crs)
+        # Pro cliff symboly předej DMR grid pro správný směr fousku
+        if sym_key in _CLIFF_SYMS:
+            plot_symbol(ax, sym_key, subset, zorder, sym_library, current_crs,
+                        dmr_grid=dmr_grid, grid_x=grid_x, grid_y=grid_y)
+        else:
+            plot_symbol(ax, sym_key, subset, zorder, sym_library, current_crs)
 
     if gdf is not None and not gdf.empty:
         gdf = gdf.reset_index(drop=True)

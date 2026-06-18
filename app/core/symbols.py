@@ -115,7 +115,8 @@ class SymbolLibrary:
 
 def plot_symbol(ax, sym_key: str, gdf: gpd.GeoDataFrame,
                 zorder: float, sym_library: SymbolLibrary,
-                current_crs: str = "EPSG:5514"):
+                current_crs: str = "EPSG:5514",
+                dmr_grid=None, grid_x=None, grid_y=None):
     """Vykreslí GeoDataFrame pomocí ISOM symbolu ze sym_library."""
     if gdf is None or gdf.empty:
         return
@@ -164,9 +165,17 @@ def plot_symbol(ax, sym_key: str, gdf: gpd.GeoDataFrame,
         _plot_dotted_hatch(ax, gdf, sym_props, zorder)
         return
 
-    # Tick marks (cliff symbols)
+    # sym510 — elektrické vedení: kolmé tiky ve vertexech
+    if sym_key == "sym510":
+        _strip_custom_keys(sym_props)
+        gdf.plot(ax=ax, zorder=zorder, **sym_props)
+        _plot_power_line_ticks(ax, gdf, sym_props, zorder)
+        return
+
+    # Tick marks (cliff symbols) — fousky po svahu pomocí DMR
     if "tick_length" in sym_props or sym_key in ("sym104", "sym201", "sym202"):
-        _plot_with_ticks(ax, gdf, sym_props, zorder)
+        _plot_with_ticks(ax, gdf, sym_props, zorder,
+                         dmr_grid=dmr_grid, grid_x=grid_x, grid_y=grid_y)
         return
 
     # Standard line/polygon
@@ -236,7 +245,55 @@ def _plot_dotted_hatch(ax, gdf, style_props, zorder):
                    s=dot_size, zorder=zorder + 0.1, edgecolors="none")
 
 
-def _plot_with_ticks(ax, gdf, sym_props, zorder):
+
+def _plot_power_line_ticks(ax, gdf, sym_props, zorder):
+    """Kolmé tiky ve vertexech linie — pro elektrické vedení (sym510)."""
+    tick_len = 10
+    tick_segments = []
+
+    for geom in gdf.geometry:
+        if geom is None or geom.is_empty:
+            continue
+        parts = [geom] if geom.geom_type == "LineString" else list(getattr(geom, "geoms", [geom]))
+        for line in parts:
+            coords = np.array(line.coords)
+            if len(coords) < 2:
+                continue
+            vectors = np.diff(coords, axis=0)
+            norms = np.hypot(vectors[:, 0], vectors[:, 1])
+            valid = norms > 0
+            vectors = vectors[valid]
+            norms = norms[valid]
+            coords_clean = np.vstack([coords[0], coords[1:][valid]])
+            if len(vectors) == 0:
+                continue
+
+            tangents = vectors / norms[:, None]
+            for i in range(len(coords_clean)):
+                x, y = coords_clean[i]
+                if i == 0:
+                    t = tangents[0]
+                elif i == len(coords_clean) - 1:
+                    t = tangents[-1]
+                else:
+                    t = tangents[i - 1] + tangents[i]
+                    nm = np.hypot(t[0], t[1])
+                    t = t / nm if nm != 0 else tangents[i - 1]
+
+                nx, ny = -t[1], t[0]
+                p1 = (x - nx * tick_len / 2, y - ny * tick_len / 2)
+                p2 = (x + nx * tick_len / 2, y + ny * tick_len / 2)
+                tick_segments.append([p1, p2])
+
+    if tick_segments:
+        lc = LineCollection(tick_segments,
+                            colors=sym_props.get("color", "black"),
+                            linewidths=sym_props.get("linewidth", 1.0),
+                            zorder=zorder)
+        ax.add_collection(lc)
+
+
+def _plot_with_ticks(ax, gdf, sym_props, zorder, dmr_grid=None, grid_x=None, grid_y=None):
     tick_len = float(sym_props.pop("tick_length", 4))
     tick_space = float(sym_props.pop("tick_spacing", 4))
     tick_width = float(sym_props.pop("tick_linewidth", 0.3))
@@ -247,6 +304,17 @@ def _plot_with_ticks(ax, gdf, sym_props, zorder):
 
     ticks = []
     epsilon = 0.1
+
+    # Připrav gradient DMR pro směr fousku (dolů po svahu)
+    use_dmr = (dmr_grid is not None and grid_x is not None and grid_y is not None)
+    if use_dmr:
+        grad_x, grad_y = np.gradient(dmr_grid)
+        min_x_g, max_x_g = grid_x.min(), grid_x.max()
+        min_y_g, max_y_g = grid_y.min(), grid_y.max()
+        shape_x, shape_y = grid_x.shape
+        px_size_x = (max_x_g - min_x_g) / max(shape_x - 1, 1)
+        px_size_y = (max_y_g - min_y_g) / max(shape_y - 1, 1)
+
     for geom in gdf.geometry:
         if geom is None or geom.is_empty:
             continue
@@ -266,16 +334,32 @@ def _plot_with_ticks(ax, gdf, sym_props, zorder):
                 if tan_len == 0:
                     continue
                 tx, ty = dx / tan_len, dy / tan_len
-                # tick_angle: úhel fousku od tangenty linie (stupně)
-                # 90 = kolmé na linii (cliff), 45 = šikmé pod 45° (fence)
-                # Rotace tangenty doprava o (90 - tick_angle):
-                #   0° → fousky rovnoběžné s linií (nesmysl)
-                #  45° → šikmé fousky pro plot
-                #  90° → kolmé fousky pro srázy
-                a = np.radians(90 - tick_angle)
-                rot_x =  tx * np.cos(a) + ty * np.sin(a)
-                rot_y = -tx * np.sin(a) + ty * np.cos(a)
-                ticks.append([(pt.x, pt.y), (pt.x + rot_x * tick_len, pt.y + rot_y * tick_len)])
+                n1x, n1y = ty, -tx   # normála vlevo
+                n2x, n2y = -ty, tx   # normála vpravo
+
+                if use_dmr:
+                    # Použij gradient DMR — fousky jdou dolů po svahu
+                    ix = int((pt.x - min_x_g) / px_size_x)
+                    iy = int((pt.y - min_y_g) / px_size_y)
+                    if 0 <= ix < shape_x and 0 <= iy < shape_y:
+                        gx = grad_x[ix, iy]
+                        gy = grad_y[ix, iy]
+                        if gx == 0 and gy == 0:
+                            final_nx, final_ny = n1x, n1y
+                        elif (n1x * gx) + (n1y * gy) < 0:
+                            final_nx, final_ny = n1x, n1y
+                        else:
+                            final_nx, final_ny = n2x, n2y
+                    else:
+                        final_nx, final_ny = n1x, n1y
+                else:
+                    # Fallback bez DMR — použij tick_angle
+                    a = np.radians(90 - tick_angle)
+                    final_nx = tx * np.cos(a) + ty * np.sin(a)
+                    final_ny = -tx * np.sin(a) + ty * np.cos(a)
+
+                ticks.append([(pt.x, pt.y),
+                               (pt.x + final_nx * tick_len, pt.y + final_ny * tick_len)])
     if ticks:
         lc = LineCollection(ticks, colors=tick_color, linewidths=tick_width, zorder=zorder)
         ax.add_collection(lc)
