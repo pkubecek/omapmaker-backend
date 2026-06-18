@@ -292,7 +292,7 @@ def add_vector_layers(
         else:
             pm("sym302", 27,
                c("natural").isin(["water"]) & c("water").isin(["pond", "stream"]) |
-               c("waterway").isin(["riverbank"]) & ~c("water").isin(["lake", "reservoir"]),
+               c("waterway").isin(["riverbank"]),
                gdf_polys)
 
         # 303 Napajedlo / malá vodní plocha
@@ -864,7 +864,7 @@ def add_vector_layers(
         # 531 Výrazný bodový prvek – křížek (sym531 = prominent feature X)
         cgdf = isom("531")
         if cgdf is not None:
-            pm("sym531", 56, c("artwork_type").isin(["statue"]),
+            pm("sym531", 56, c("artwork_type").isin(["statue"]) | c("playground").isin(["structure"]),
                gdf_pts)
 
         # 532 Schody (stairway – tři vrstvy: obrys, výplň, příčky)
