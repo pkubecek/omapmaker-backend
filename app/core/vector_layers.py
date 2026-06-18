@@ -831,7 +831,8 @@ def add_vector_layers(
         else:
             pm("sym525", 56,
                c("man_made").isin(["surveillance", "flagpole"]) |
-               c("historic").isin(["boundary_stone", "milestone"]),
+               c("historic").isin(["milestone"])  |
+               (c("amenity") == "hunting_stand"),
                gdf_pts)
 
         # 527 Krmítko (fodder rack – čtverec s X)
@@ -842,8 +843,7 @@ def add_vector_layers(
             pm("sym527", 56, None, zab("Krmitko"), to_mask=False)
         else:
             pm("sym527", 56,
-               c("man_made").isin(["feeding_place", "wildlife_feeding_place"]) |
-               (c("amenity") == "hunting_stand"),
+               c("man_made").isin(["feeding_place", "wildlife_feeding_place"]),
                gdf_pts)
 
         # 528 Výrazný liniový prvek – průchodný (sym528 = prominent passable line)

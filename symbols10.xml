@@ -518,8 +518,8 @@
 
     <!-- 518: Impassable fence -->
     <symbol id="sym518" type="line">
-        <style color="#000000" linewidth="1.0" linestyle="solid" />
-        <style_ticks length="6" spacing="6.2525" linewidth="0.8" color="#000000" angle="45" />
+        <style color="#000000" linewidth="4.0" linestyle="solid" />
+        <style_ticks length="10" spacing="6.2525" linewidth="0.8" color="#000000" angle="45" />
     </symbol>
 
     <!-- 519: Crossing point (opening in fence/wall) -->
