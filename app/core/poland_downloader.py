@@ -483,11 +483,6 @@ def _merge_laz_epsg2180(input_paths: list, output_path: str,
     if progress_cb:
         progress_cb(f"  Clip bbox EPSG:2180: {bx0:.0f},{by0:.0f} .. {bx1:.0f},{by1:.0f}")
 
-    if len(input_paths) == 1:
-        import shutil
-        shutil.copy2(input_paths[0], output_path)
-        return True
-
     try:
         with laspy.open(input_paths[0]) as fh_tmp:
             header_ref = fh_tmp.header
@@ -559,6 +554,90 @@ def _merge_laz_epsg2180(input_paths: list, output_path: str,
 
     except Exception as e:
         print(f"[pl_downloader] Merge chyba: {e}")
+        import traceback; traceback.print_exc()
+        return False
+
+
+
+def _merge_laz_dsm_epsg2180(input_paths: list, output_path: str,
+                              bbox_wgs84: tuple, progress_cb=None) -> bool:
+    """
+    Vytvoří DSM LAZ ze stejných LiDAR souborů jako DTM,
+    ale vybere všechny body KROMĚ země (class != 2) a noise (class != 7).
+    Výsledek je kompatibilní s pipeline.py jako DSM vstup.
+    """
+    import gc
+    import laspy
+    import numpy as np
+    from pyproj import Transformer
+
+    if not input_paths:
+        return False
+
+    mn_lat, mn_lon, mx_lat, mx_lon = bbox_wgs84
+    t = Transformer.from_crs("EPSG:4326", "EPSG:2180", always_xy=True)
+    xs, ys = t.transform([mn_lon, mx_lon, mn_lon, mx_lon],
+                          [mn_lat, mn_lat, mx_lat, mx_lat])
+    bx0, bx1 = min(xs) - 100, max(xs) + 100
+    by0, by1 = min(ys) - 100, max(ys) + 100
+
+    try:
+        with laspy.open(input_paths[0]) as fh_tmp:
+            header_ref = fh_tmp.header
+
+        out_header = laspy.LasHeader(
+            point_format=header_ref.point_format,
+            version=header_ref.version,
+        )
+        out_header.scales = np.array([0.01, 0.01, 0.01])
+
+        global_min_x, global_min_y, global_min_z = np.inf, np.inf, np.inf
+        for path in input_paths:
+            with laspy.open(path) as fh:
+                hdr = fh.header
+                global_min_x = min(global_min_x, float(hdr.x_min))
+                global_min_y = min(global_min_y, float(hdr.y_min))
+                global_min_z = min(global_min_z, float(hdr.z_min))
+        out_header.offsets = np.array([global_min_x, global_min_y, global_min_z])
+
+        total_written = 0
+        CHUNK_SIZE = 200_000
+
+        with laspy.open(output_path, mode="w", header=out_header) as out_fh:
+            for path in input_paths:
+                if progress_cb:
+                    progress_cb(f"  DSM merge: {os.path.basename(path)}")
+                with laspy.open(path) as fh:
+                    for chunk in fh.chunk_iterator(CHUNK_SIZE):
+                        cx = np.array(chunk.x)
+                        cy = np.array(chunk.y)
+                        cz = np.array(chunk.z)
+                        cc = np.array(chunk.classification)
+                        # bbox filter
+                        m = (cx >= bx0) & (cx <= bx1) & (cy >= by0) & (cy <= by1)
+                        # DSM: vše kromě noise (7) a unclassified který je pod zemí
+                        # Ponecháme: 1 (unclass), 3 (low veg), 4 (med veg), 5 (high veg),
+                        #             6 (building), 9 (water), 2 (ground) jako podádní body
+                        # Vynecháme: 7 (noise), 18 (high noise)
+                        m &= ~np.isin(cc, [7, 18])
+                        if not np.any(m):
+                            continue
+                        cx, cy, cz, cc = cx[m], cy[m], cz[m], cc[m]
+                        out_chunk = laspy.ScaleAwarePointRecord.zeros(len(cx), header=out_header)
+                        out_chunk.x = cx
+                        out_chunk.y = cy
+                        out_chunk.z = cz
+                        out_chunk.classification = cc
+                        out_fh.write_points(out_chunk)
+                        total_written += len(cx)
+                        del cx, cy, cz, cc, out_chunk
+                gc.collect()
+
+        print(f"[pl_downloader] DSM merge: {total_written:,} bodů → {os.path.basename(output_path)}")
+        return total_written > 0
+
+    except Exception as e:
+        print(f"[pl_downloader] DSM merge chyba: {e}")
         import traceback; traceback.print_exc()
         return False
 
@@ -666,14 +745,10 @@ def download_poland(
             raise RuntimeError("Konverze NMT TIF → LAZ selhala.")
         dtm_files = [dtm_laz]
 
-    # Merge LAZ dlaždic do jednoho souboru
+    # Merge LAZ dlaždic do jednoho souboru (vždy s bbox ořezem)
     dtm_merged = os.path.join(out_dir, "PL_LiDAR_DTM_merged.laz")
-    if len(dtm_files) == 1:
-        import shutil
-        shutil.copy2(dtm_files[0], dtm_merged)
-        cb(f"DTM: 1 soubor, přejmenováno.")
-    elif dtm_files:
-        cb("Merguji DTM dlaždice...")
+    if dtm_files:
+        cb("Merguji/ořezávám DTM dlaždice...")
         ok = _merge_laz_epsg2180(dtm_files, dtm_merged, bbox_wgs84, cb)
         if not ok:
             raise RuntimeError("Merge DTM LAZ selhal.")
@@ -681,41 +756,20 @@ def download_poland(
         raise RuntimeError("Žádné DTM soubory k mergování.")
 
     # -------------------------------------------------------------------------
-    # DSM (NMPT)
+    # DSM — z LiDAR non-ground bodů (NMPT WFS vyžaduje autorizaci)
     # -------------------------------------------------------------------------
     dmp_merged = ""
-    dmp_raw_dir = os.path.join(out_dir, "dmp_tiles")
-    os.makedirs(dmp_raw_dir, exist_ok=True)
 
-    cb("Hledám NMPT (DSM) dlaždice...")
-    nmpt_tiles = _query_tiles(
-        _WFS_NMPT, _NMPT_YEARS,
-        "SkorowidzNumerycznegoModeluPowierzchniTerenu",
-        bbox_wgs84, progress_cb=cb,
-    )
-
-    if nmpt_tiles:
-        cb(f"Stahuju {len(nmpt_tiles)} NMPT dlaždic...")
-        nmpt_tif_files = []
-        for i, tile in enumerate(nmpt_tiles, 1):
-            cb(f"  NMPT {i}/{len(nmpt_tiles)}: {tile['name']}")
-            ext = os.path.splitext(tile["url"])[1].lower()
-            dest = os.path.join(dmp_raw_dir, tile["name"] + (ext if ext else ".tif"))
-            if _download_file(tile["url"], dest, cb):
-                if ext == ".zip":
-                    extracted = _extract_if_zip(dest, dmp_raw_dir)
-                    nmpt_tif_files.extend(extracted)
-                elif ext in (".tif", ".tiff", ".asc"):
-                    nmpt_tif_files.append(dest)
-
-        if nmpt_tif_files:
-            cb("Konvertuji NMPT rastr → LAZ...")
-            dmp_laz = os.path.join(out_dir, "PL_NMPT_merged.laz")
-            ok = _merge_tif_to_laz(nmpt_tif_files, dmp_laz, cb)
-            if ok:
-                dmp_merged = dmp_laz
+    if dtm_files and use_lidar_point_cloud:
+        cb("Vytvářím DSM z LiDAR non-ground bodů...")
+        dmp_laz = os.path.join(out_dir, "PL_LiDAR_DSM_merged.laz")
+        ok = _merge_laz_dsm_epsg2180(dtm_files, dmp_laz, bbox_wgs84, cb)
+        if ok:
+            dmp_merged = dmp_laz
+        else:
+            cb("DSM z LiDAR selhal — mapa bude bez vegetace.")
     else:
-        cb("NMPT dlaždice nenalezeny — DSM nebude k dispozici.")
+        cb("LiDAR nedostupný — DSM nebude k dispozici.")
 
     cb("Hotovo!")
     return {
