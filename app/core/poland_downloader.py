@@ -314,6 +314,115 @@ def _merge_tif_to_laz(tif_paths: list[str], output_laz: str,
         return False
 
 
+def _merge_laz_epsg2180(input_paths: list, output_path: str,
+                         bbox_wgs84: tuple, progress_cb=None) -> bool:
+    """
+    Merge LAZ/LAS souborů v EPSG:2180 s ořezem podle WGS84 bbox.
+    Na rozdíl od ČÚZK merge_laz_files: předpokládá EPSG:2180 vstup,
+    transformuje clip bbox do EPSG:2180 přímo (bez čtení CRS z LAZ headeru).
+    """
+    import gc
+    import laspy
+    import numpy as np
+    from pyproj import Transformer
+
+    if not input_paths:
+        return False
+
+    # Transformuj clip bbox WGS84 → EPSG:2180
+    mn_lat, mn_lon, mx_lat, mx_lon = bbox_wgs84
+    t = Transformer.from_crs("EPSG:4326", "EPSG:2180", always_xy=True)
+    xs, ys = t.transform([mn_lon, mx_lon, mn_lon, mx_lon],
+                          [mn_lat, mn_lat, mx_lat, mx_lat])
+    bx0, bx1 = min(xs), max(xs)
+    by0, by1 = min(ys), max(ys)
+    # Malý buffer 100m pro jistotu
+    bx0 -= 100; by0 -= 100; bx1 += 100; by1 += 100
+
+    if progress_cb:
+        progress_cb(f"  Clip bbox EPSG:2180: {bx0:.0f},{by0:.0f} .. {bx1:.0f},{by1:.0f}")
+
+    if len(input_paths) == 1:
+        import shutil
+        shutil.copy2(input_paths[0], output_path)
+        return True
+
+    try:
+        with laspy.open(input_paths[0]) as fh_tmp:
+            header_ref = fh_tmp.header
+
+        out_header = laspy.LasHeader(
+            point_format=header_ref.point_format,
+            version=header_ref.version,
+        )
+        out_header.scales = np.array([0.01, 0.01, 0.01])
+
+        global_min_x, global_min_y, global_min_z = np.inf, np.inf, np.inf
+        for path in input_paths:
+            with laspy.open(path) as fh:
+                hdr = fh.header
+                global_min_x = min(global_min_x, float(hdr.x_min))
+                global_min_y = min(global_min_y, float(hdr.y_min))
+                global_min_z = min(global_min_z, float(hdr.z_min))
+        out_header.offsets = np.array([global_min_x, global_min_y, global_min_z])
+
+        total_written = 0
+        CHUNK_SIZE = 200_000
+
+        with laspy.open(output_path, mode="w", header=out_header) as out_fh:
+            for path in input_paths:
+                if progress_cb:
+                    progress_cb(f"  Mergování: {os.path.basename(path)}")
+                with laspy.open(path) as fh:
+                    for chunk in fh.chunk_iterator(CHUNK_SIZE):
+                        cx = np.array(chunk.x)
+                        cy = np.array(chunk.y)
+                        cz = np.array(chunk.z)
+                        cc = np.array(chunk.classification)
+                        m = (cx >= bx0) & (cx <= bx1) & (cy >= by0) & (cy <= by1)
+                        if not np.any(m):
+                            continue
+                        cx, cy, cz, cc = cx[m], cy[m], cz[m], cc[m]
+                        out_chunk = laspy.ScaleAwarePointRecord.zeros(len(cx), header=out_header)
+                        out_chunk.x = cx
+                        out_chunk.y = cy
+                        out_chunk.z = cz
+                        out_chunk.classification = cc
+                        out_fh.write_points(out_chunk)
+                        total_written += len(cx)
+                        del cx, cy, cz, cc, out_chunk
+                gc.collect()
+
+        if total_written == 0:
+            print("[pl_downloader] Varování: po ořezu nezůstaly žádné body!")
+            # Zkus merge bez ořezu jako fallback
+            if progress_cb:
+                progress_cb("  Clip selhal, zkouším merge bez ořezu...")
+            with laspy.open(output_path, mode="w", header=out_header) as out_fh:
+                for path in input_paths:
+                    with laspy.open(path) as fh:
+                        for chunk in fh.chunk_iterator(CHUNK_SIZE):
+                            out_chunk = laspy.ScaleAwarePointRecord.zeros(
+                                len(chunk.x), header=out_header)
+                            out_chunk.x = np.array(chunk.x)
+                            out_chunk.y = np.array(chunk.y)
+                            out_chunk.z = np.array(chunk.z)
+                            out_chunk.classification = np.array(chunk.classification)
+                            out_fh.write_points(out_chunk)
+                            total_written += len(chunk.x)
+            if progress_cb:
+                progress_cb(f"  Merge bez ořezu: {total_written:,} bodů")
+
+        print(f"[pl_downloader] Merge: {total_written:,} bodů → {os.path.basename(output_path)}")
+        return total_written > 0
+
+    except Exception as e:
+        print(f"[pl_downloader] Merge chyba: {e}")
+        import traceback; traceback.print_exc()
+        return False
+
+
+
 def download_poland(
     bbox: dict,
     out_dir: str,
@@ -418,13 +527,13 @@ def download_poland(
 
     # Merge LAZ dlaždic do jednoho souboru
     dtm_merged = os.path.join(out_dir, "PL_LiDAR_DTM_merged.laz")
-    if len(dtm_files) == 1 and dtm_files[0].endswith(".laz"):
+    if len(dtm_files) == 1:
         import shutil
         shutil.copy2(dtm_files[0], dtm_merged)
+        cb(f"DTM: 1 soubor, přejmenováno.")
     elif dtm_files:
         cb("Merguji DTM dlaždice...")
-        from .downloader import merge_laz_files  # z ČÚZK downloaderu
-        ok = merge_laz_files(dtm_files, dtm_merged, clip_bbox_wgs84=bbox_wgs84)
+        ok = _merge_laz_epsg2180(dtm_files, dtm_merged, bbox_wgs84, cb)
         if not ok:
             raise RuntimeError("Merge DTM LAZ selhal.")
     else:
