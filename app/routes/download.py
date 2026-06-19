@@ -16,8 +16,11 @@ import os
 import uuid
 import json
 import threading
+import ssl
+import urllib.request
+import xml.etree.ElementTree as ET
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from ..core.downloader import download_cuzk as _download_cuzk
@@ -258,3 +261,71 @@ async def get_poland_dmp(dl_id: str):
         raise HTTPException(status_code=404, detail="DSM soubor nenalezen (nebo nebyl dostupný).")
     return FileResponse(path, media_type="application/octet-stream",
                         filename=os.path.basename(path))
+
+
+# ============================================================
+# DEBUG — dočasný endpoint pro diagnostiku WFS
+# GET /api/download/debug/poland-wfs
+# ============================================================
+
+_SSL_CTX_DBG = ssl.create_default_context()
+_SSL_CTX_DBG.check_hostname = False
+_SSL_CTX_DBG.verify_mode = ssl.CERT_NONE
+
+_WFS_ENDPOINTS = {
+    "lidar": "https://mapy.geoportal.gov.pl/wss/service/PZGIK/DanePomiaroweLidarEVRF2007/WFS/Skorowidze",
+    "nmt":   "https://mapy.geoportal.gov.pl/wss/service/PZGIK/NumerycznyModelTerenuEVRF2007/WFS/Skorowidze",
+    "nmpt":  "https://mapy.geoportal.gov.pl/wss/service/PZGIK/NumerycznyModelPowierzchniEVRF2007/WFS/Skorowidze",
+}
+
+@router.get("/download/debug/poland-wfs")
+async def debug_poland_wfs(
+    lat: float = 50.05,
+    lon: float = 19.95,
+    span: float = 0.1,
+):
+    """
+    Diagnostický endpoint.
+    Příklad: /api/download/debug/poland-wfs?lat=50.05&lon=19.95&span=0.1
+    """
+    result = {}
+    headers = {"User-Agent": "OMapMaker/7 diagnostic"}
+
+    for name, wfs_url in _WFS_ENDPOINTS.items():
+        caps_url = f"{wfs_url}?SERVICE=WFS&REQUEST=GetCapabilities"
+        try:
+            req = urllib.request.Request(caps_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=20, context=_SSL_CTX_DBG) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+            root = ET.fromstring(raw)
+            type_names = [
+                el.text.strip()
+                for el in root.iter()
+                if (el.tag.endswith("}Name") or el.tag == "Name")
+                and el.text and ":" in el.text
+            ]
+            result[name] = {"caps_ok": True, "type_names": type_names}
+        except Exception as e:
+            result[name] = {"caps_ok": False, "error": str(e)}
+            continue
+
+        # Zkus GetFeature s prvním TypeName
+        if type_names:
+            tn = type_names[0]
+            bbox_str = f"{lon-span},{lat-span},{lon+span},{lat+span},urn:ogc:def:crs:EPSG::4326"
+            feat_url = (
+                f"{wfs_url}?SERVICE=WFS&REQUEST=GetFeature&VERSION=2.0.0"
+                f"&TYPENAMES={tn}&SRSNAME=urn:ogc:def:crs:EPSG::4326"
+                f"&BBOX={bbox_str}&COUNT=3"
+            )
+            try:
+                req2 = urllib.request.Request(feat_url, headers=headers)
+                with urllib.request.urlopen(req2, timeout=20, context=_SSL_CTX_DBG) as resp2:
+                    raw2 = resp2.read().decode("utf-8", errors="replace")
+                result[name]["feature_sample"] = raw2[:2000]
+                result[name]["feature_url"] = feat_url
+            except Exception as e2:
+                result[name]["feature_error"] = str(e2)
+                result[name]["feature_url"] = feat_url
+
+    return JSONResponse(result)
