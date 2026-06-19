@@ -64,10 +64,10 @@ def _wfs_get_feature(wfs_url: str, type_name: str,
     """
     Volá WFS GetFeature a vrátí seznam dlaždic jako dict s klíčem 'url'.
     bbox_wgs84: (min_lat, min_lon, max_lat, max_lon)
-    Vrátí: [{"url": "https://...", "name": "...", "geom_bbox": (...)}]
+    Vrátí: [{"url": "https://...", "name": "..."}]
     """
     mn_lat, mn_lon, mx_lat, mx_lon = bbox_wgs84
-    # GUGiK WFS chce BBOX jako lon,lat (EPSG:4326 s urn CRS)
+    # GUGiK WFS: BBOX = minx,miny,maxx,maxy = lon_min,lat_min,lon_max,lat_max
     bbox_str = f"{mn_lon},{mn_lat},{mx_lon},{mx_lat},urn:ogc:def:crs:EPSG::4326"
 
     url = (
@@ -77,6 +77,8 @@ def _wfs_get_feature(wfs_url: str, type_name: str,
         f"&BBOX={bbox_str}"
         f"&COUNT={max_features}"
     )
+    print(f"[pl_downloader] WFS URL: {url}")
+
     try:
         req = urllib.request.Request(url, headers=_HEADERS)
         with urllib.request.urlopen(req, timeout=60, context=_SSL_CTX) as resp:
@@ -85,50 +87,68 @@ def _wfs_get_feature(wfs_url: str, type_name: str,
         print(f"[pl_downloader] WFS chyba ({type_name}): {e}")
         return []
 
+    # Debug: vypiš prvních 1000 znaků odpovědi
+    raw_str = raw.decode("utf-8", errors="replace")
+    print(f"[pl_downloader] WFS odpověď ({type_name}): {raw_str[:1000]}")
+
     try:
         root = ET.fromstring(raw)
     except ET.ParseError as e:
         print(f"[pl_downloader] WFS XML parse chyba: {e}")
         return []
 
-    # Namespaces v odpovědi GUGiK
-    ns = {
-        "wfs": "http://www.opengis.net/wfs/2.0",
-        "gugik": "http://gugik.gov.pl",
-        "gml": "http://www.opengis.net/gml/3.2",
-    }
+    # Vypiš všechny tagy v odpovědi pro diagnostiku
+    all_tags = set(el.tag for el in root.iter())
+    print(f"[pl_downloader] XML tagy: {all_tags}")
 
     tiles = []
-    # Hledáme url_do_pobrania v libovolném namespace
-    for member in root.iter():
-        # Najdi element s URL ke stažení
-        url_elem = None
-        # Zkus různé možné názvy elementu
-        for tag_suffix in ["url_do_pobrania", "URL_do_pobrania", "urlDoPobrania", "url"]:
-            url_elem = member.find(f"gugik:{tag_suffix}", ns)
-            if url_elem is None:
-                # Zkus bez namespace
-                url_elem = member.find(tag_suffix)
-            if url_elem is not None and url_elem.text:
-                break
 
-        if url_elem is None or not url_elem.text:
-            continue
+    # Strategie 1: hledej jakýkoliv element jehož text je HTTP URL na LAZ/TIF/ZIP
+    _DL_EXTS = (".laz", ".las", ".zip", ".tif", ".tiff", ".asc", ".xyz")
+    for el in root.iter():
+        text = (el.text or "").strip()
+        if (text.startswith("http") and
+                any(text.lower().endswith(ext) for ext in _DL_EXTS)):
+            # Název dlaždice — zkus sourozenecké elementy nebo atribut
+            name = os.path.basename(text)
+            # Zkus najít element nazwa_pliku/nazwa jako sourozence (parent → children)
+            parent = el  # nemáme přístup k parentu přes ET, použijeme basename
+            tiles.append({"url": text, "name": name})
+            print(f"[pl_downloader]   nalezena dlaždice: {name} → {text[:80]}")
 
-        download_url = url_elem.text.strip()
-        if not (download_url.startswith("http") and
-                any(download_url.lower().endswith(ext)
-                    for ext in [".laz", ".las", ".zip", ".tif", ".tiff", ".asc"])):
-            continue
+    # Strategie 2: hledej atributy href
+    if not tiles:
+        for el in root.iter():
+            href = el.get("{http://www.w3.org/1999/xlink}href", "") or el.get("href", "")
+            if href.startswith("http") and any(href.lower().endswith(ext) for ext in _DL_EXTS):
+                tiles.append({"url": href, "name": os.path.basename(href)})
+                print(f"[pl_downloader]   nalezena dlaždice (href): {os.path.basename(href)}")
 
-        # Název dlaždice
-        name_elem = member.find("gugik:nazwa_pliku", ns) or member.find("nazwa_pliku")
-        name = name_elem.text.strip() if name_elem is not None and name_elem.text else \
-               os.path.basename(download_url)
-
-        tiles.append({"url": download_url, "name": name})
+    if not tiles:
+        print(f"[pl_downloader] Žádné dlaždice nalezeny v odpovědi pro {type_name}")
 
     return tiles
+
+
+def _get_available_type_names(wfs_url: str) -> list[str]:
+    """Zjistí dostupné TypeNames z WFS GetCapabilities."""
+    url = f"{wfs_url}?SERVICE=WFS&REQUEST=GetCapabilities"
+    try:
+        req = urllib.request.Request(url, headers=_HEADERS)
+        with urllib.request.urlopen(req, timeout=30, context=_SSL_CTX) as resp:
+            raw = resp.read()
+        root = ET.fromstring(raw)
+        names = []
+        # WFS 2.0: //FeatureTypeList/FeatureType/Name
+        for el in root.iter():
+            if el.tag.endswith("}Name") or el.tag == "Name":
+                if el.text and ":" in el.text:
+                    names.append(el.text.strip())
+        print(f"[pl_downloader] GetCapabilities TypeNames: {names}")
+        return names
+    except Exception as e:
+        print(f"[pl_downloader] GetCapabilities chyba: {e}")
+        return []
 
 
 def _query_tiles(wfs_url: str, years: list[int],
@@ -138,6 +158,22 @@ def _query_tiles(wfs_url: str, years: list[int],
     Prochází roky od nejnovějšího a sbírá dlaždice pokrývající bbox.
     Každá dlaždice se započítá jen jednou (preferuje novější rok).
     """
+    # Zjisti dostupné TypeNames z GetCapabilities
+    available = _get_available_type_names(wfs_url)
+    if available:
+        # Filtruj roky podle skutečně dostupných vrstev
+        valid_years = []
+        for y in years:
+            tn = f"gugik:{type_prefix}{y}"
+            if any(tn in a or str(y) in a for a in available):
+                valid_years.append(y)
+        if valid_years:
+            years = valid_years
+            print(f"[pl_downloader] Dostupné roky pro {type_prefix}: {years}")
+        else:
+            # GetCapabilities vrátil jiné názvy — zkus všechny roky stejně
+            print(f"[pl_downloader] Žádné odpovídající TypeNames pro {type_prefix}, zkouším všechny roky")
+
     seen_names = set()
     all_tiles = []
 
