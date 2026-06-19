@@ -46,15 +46,22 @@ _WFS_NMT = (
     "https://mapy.geoportal.gov.pl/wss/service/PZGIK"
     "/NumerycznyModelTerenuEVRF2007/WFS/Skorowidze"
 )
+_WFS_NMT_KRON86 = (
+    "https://mapy.geoportal.gov.pl/wss/service/PZGIK"
+    "/NumerycznyModelTerenuKRON86/WFS/Skorowidze"
+)
 _WFS_NMPT = (
     "https://mapy.geoportal.gov.pl/wss/service/PZGIK"
     "/NumerycznyModelPowierzchniEVRF2007/WFS/Skorowidze"
 )
 
 # Roky dostupných dat (od nejnovějšího) — WFS má vrstvy per rok
-_LIDAR_YEARS = [2021, 2020, 2019, 2018]
-_NMT_YEARS   = [2021, 2020, 2019, 2018, 2017, 2016, 2015]
-_NMPT_YEARS  = [2021, 2020, 2019, 2018, 2017]
+# EVRF2007: LiDAR 2018-2022, NMT 2018-2020, NMPT 2018-2021
+_LIDAR_YEARS = [2022, 2021, 2020, 2019, 2018]
+_NMT_YEARS   = [2020, 2019, 2018]
+_NMPT_YEARS  = [2021, 2020, 2019, 2018]
+# KRON86 fallback pro oblasti bez EVRF2007 pokryti (2000-2019)
+_NMT_KRON86_YEARS = [2019, 2018, 2017, 2016, 2015]
 
 _HEADERS = {"User-Agent": "OMapMaker/7 (orienteering map tool)"}
 
@@ -369,12 +376,22 @@ def download_poland(
             use_lidar_point_cloud = False
 
     if not use_lidar_point_cloud or not dtm_files:
-        cb("Hledám NMT (rastr DTM) dlaždice...")
+        cb("Hledám NMT (rastr DTM) dlaždice [EVRF2007]...")
         nmt_tiles = _query_tiles(
             _WFS_NMT, _NMT_YEARS,
             "SkorowidzNumerycznegoModeluTerenu",
             bbox_wgs84, progress_cb=cb,
         )
+
+        # Fallback na KRON86 WFS pokud EVRF2007 nemá pokryti
+        if not nmt_tiles:
+            cb("EVRF2007 NMT nenalezen, zkouším KRON86 fallback...")
+            nmt_tiles = _query_tiles(
+                _WFS_NMT_KRON86, _NMT_KRON86_YEARS,
+                "SkorowidzNumerycznegoModeluTerenu",
+                bbox_wgs84, progress_cb=cb,
+            )
+
         cb(f"Stahuju {len(nmt_tiles)} NMT dlaždic...")
         nmt_tif_files = []
         for i, tile in enumerate(nmt_tiles, 1):
