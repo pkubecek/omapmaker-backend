@@ -59,96 +59,122 @@ _NMPT_YEARS  = [2021, 2020, 2019, 2018, 2017]
 _HEADERS = {"User-Agent": "OMapMaker/7 (orienteering map tool)"}
 
 
+def _bbox_wgs84_to_2180(bbox_wgs84: tuple) -> tuple:
+    """Transformuje bbox z WGS84 na EPSG:2180 (PL-1992)."""
+    mn_lat, mn_lon, mx_lat, mx_lon = bbox_wgs84
+    t = Transformer.from_crs("EPSG:4326", "EPSG:2180", always_xy=True)
+    x0, y0 = t.transform(mn_lon, mn_lat)
+    x1, y1 = t.transform(mx_lon, mx_lat)
+    return (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+
+
 def _wfs_get_feature(wfs_url: str, type_name: str,
                      bbox_wgs84: tuple, max_features: int = 500) -> list[dict]:
     """
     Volá WFS GetFeature a vrátí seznam dlaždic jako dict s klíčem 'url'.
     bbox_wgs84: (min_lat, min_lon, max_lat, max_lon)
     Vrátí: [{"url": "https://...", "name": "..."}]
+
+    GUGiK WFS vyžaduje bbox v EPSG:2180. Zkouší WFS 2.0.0, fallback na 1.1.0.
     """
     mn_lat, mn_lon, mx_lat, mx_lon = bbox_wgs84
-    # GUGiK WFS: BBOX = minx,miny,maxx,maxy = lon_min,lat_min,lon_max,lat_max
-    bbox_str = f"{mn_lon},{mn_lat},{mx_lon},{mx_lat},urn:ogc:def:crs:EPSG::4326"
 
-    url = (
+    # Transformuj bbox do EPSG:2180 — GUGiK WFS odmítá WGS84 bbox (vrací 400)
+    try:
+        bx0, by0, bx1, by1 = _bbox_wgs84_to_2180(bbox_wgs84)
+    except Exception as e:
+        print(f"[pl_downloader] Transformace bbox selhala: {e}, zkouším WGS84")
+        bx0, by0, bx1, by1 = mn_lon, mn_lat, mx_lon, mx_lat
+
+    # Přidej buffer 5 km pro jistotu
+    BUFFER = 5000
+    bx0 -= BUFFER; by0 -= BUFFER; bx1 += BUFFER; by1 += BUFFER
+
+    _DL_EXTS = (".laz", ".las", ".zip", ".tif", ".tiff", ".asc", ".xyz")
+
+    def _parse_tiles(raw: bytes) -> list[dict]:
+        raw_str = raw.decode("utf-8", errors="replace")
+        print(f"[pl_downloader] WFS odpověď ({type_name}): {raw_str[:800]}")
+        try:
+            root = ET.fromstring(raw)
+        except ET.ParseError as e:
+            print(f"[pl_downloader] XML parse chyba: {e}")
+            return []
+        tiles = []
+        # Hledej URL v textu elementů
+        for el in root.iter():
+            text = (el.text or "").strip()
+            if text.startswith("http") and any(text.lower().endswith(ext) for ext in _DL_EXTS):
+                tiles.append({"url": text, "name": os.path.basename(text)})
+                print(f"[pl_downloader]   dlaždice: {os.path.basename(text)}")
+        # Fallback: hledej xlink:href atributy
+        if not tiles:
+            for el in root.iter():
+                href = el.get("{http://www.w3.org/1999/xlink}href", "") or el.get("href", "")
+                if href.startswith("http") and any(href.lower().endswith(ext) for ext in _DL_EXTS):
+                    tiles.append({"url": href, "name": os.path.basename(href)})
+                    print(f"[pl_downloader]   dlaždice (href): {os.path.basename(href)}")
+        return tiles
+
+    # Pokus 1: WFS 2.0.0 s EPSG:2180 bbox
+    bbox_str_2180 = f"{bx0:.2f},{by0:.2f},{bx1:.2f},{by1:.2f},urn:ogc:def:crs:EPSG::2180"
+    url_v2 = (
         f"{wfs_url}?SERVICE=WFS&REQUEST=GetFeature&VERSION=2.0.0"
         f"&TYPENAMES={type_name}"
-        f"&SRSNAME=urn:ogc:def:crs:EPSG::4326"
-        f"&BBOX={bbox_str}"
+        f"&BBOX={bbox_str_2180}"
         f"&COUNT={max_features}"
     )
-    print(f"[pl_downloader] WFS URL: {url}")
-
+    print(f"[pl_downloader] WFS 2.0 URL: {url_v2}")
     try:
-        req = urllib.request.Request(url, headers=_HEADERS)
+        req = urllib.request.Request(url_v2, headers=_HEADERS)
         with urllib.request.urlopen(req, timeout=60, context=_SSL_CTX) as resp:
             raw = resp.read()
+        tiles = _parse_tiles(raw)
+        if tiles:
+            return tiles
+    except urllib.error.HTTPError as e:
+        print(f"[pl_downloader] WFS 2.0 chyba ({type_name}): {e}")
     except Exception as e:
-        print(f"[pl_downloader] WFS chyba ({type_name}): {e}")
+        print(f"[pl_downloader] WFS 2.0 chyba ({type_name}): {e}")
         return []
 
-    # Debug: vypiš prvních 1000 znaků odpovědi
-    raw_str = raw.decode("utf-8", errors="replace")
-    print(f"[pl_downloader] WFS odpověď ({type_name}): {raw_str[:1000]}")
-
+    # Pokus 2: WFS 1.1.0 s EPSG:2180 bbox (jiné pořadí os)
+    bbox_str_v11 = f"{bx0:.2f},{by0:.2f},{bx1:.2f},{by1:.2f},EPSG:2180"
+    url_v11 = (
+        f"{wfs_url}?SERVICE=WFS&REQUEST=GetFeature&VERSION=1.1.0"
+        f"&TYPENAME={type_name}"
+        f"&BBOX={bbox_str_v11}"
+        f"&MAXFEATURES={max_features}"
+    )
+    print(f"[pl_downloader] WFS 1.1 URL: {url_v11}")
     try:
-        root = ET.fromstring(raw)
-    except ET.ParseError as e:
-        print(f"[pl_downloader] WFS XML parse chyba: {e}")
-        return []
-
-    # Vypiš všechny tagy v odpovědi pro diagnostiku
-    all_tags = set(el.tag for el in root.iter())
-    print(f"[pl_downloader] XML tagy: {all_tags}")
-
-    tiles = []
-
-    # Strategie 1: hledej jakýkoliv element jehož text je HTTP URL na LAZ/TIF/ZIP
-    _DL_EXTS = (".laz", ".las", ".zip", ".tif", ".tiff", ".asc", ".xyz")
-    for el in root.iter():
-        text = (el.text or "").strip()
-        if (text.startswith("http") and
-                any(text.lower().endswith(ext) for ext in _DL_EXTS)):
-            # Název dlaždice — zkus sourozenecké elementy nebo atribut
-            name = os.path.basename(text)
-            # Zkus najít element nazwa_pliku/nazwa jako sourozence (parent → children)
-            parent = el  # nemáme přístup k parentu přes ET, použijeme basename
-            tiles.append({"url": text, "name": name})
-            print(f"[pl_downloader]   nalezena dlaždice: {name} → {text[:80]}")
-
-    # Strategie 2: hledej atributy href
-    if not tiles:
-        for el in root.iter():
-            href = el.get("{http://www.w3.org/1999/xlink}href", "") or el.get("href", "")
-            if href.startswith("http") and any(href.lower().endswith(ext) for ext in _DL_EXTS):
-                tiles.append({"url": href, "name": os.path.basename(href)})
-                print(f"[pl_downloader]   nalezena dlaždice (href): {os.path.basename(href)}")
-
-    if not tiles:
-        print(f"[pl_downloader] Žádné dlaždice nalezeny v odpovědi pro {type_name}")
-
-    return tiles
-
-
-def _get_available_type_names(wfs_url: str) -> list[str]:
-    """Zjistí dostupné TypeNames z WFS GetCapabilities."""
-    url = f"{wfs_url}?SERVICE=WFS&REQUEST=GetCapabilities"
-    try:
-        req = urllib.request.Request(url, headers=_HEADERS)
-        with urllib.request.urlopen(req, timeout=30, context=_SSL_CTX) as resp:
+        req = urllib.request.Request(url_v11, headers=_HEADERS)
+        with urllib.request.urlopen(req, timeout=60, context=_SSL_CTX) as resp:
             raw = resp.read()
-        root = ET.fromstring(raw)
-        names = []
-        # WFS 2.0: //FeatureTypeList/FeatureType/Name
-        for el in root.iter():
-            if el.tag.endswith("}Name") or el.tag == "Name":
-                if el.text and ":" in el.text:
-                    names.append(el.text.strip())
-        print(f"[pl_downloader] GetCapabilities TypeNames: {names}")
-        return names
+        tiles = _parse_tiles(raw)
+        if tiles:
+            return tiles
     except Exception as e:
-        print(f"[pl_downloader] GetCapabilities chyba: {e}")
-        return []
+        print(f"[pl_downloader] WFS 1.1 chyba ({type_name}): {e}")
+
+    # Pokus 3: WFS 1.0.0
+    url_v10 = (
+        f"{wfs_url}?SERVICE=WFS&REQUEST=GetFeature&VERSION=1.0.0"
+        f"&TYPENAME={type_name}"
+        f"&BBOX={bx0:.2f},{by0:.2f},{bx1:.2f},{by1:.2f}"
+        f"&MAXFEATURES={max_features}"
+    )
+    print(f"[pl_downloader] WFS 1.0 URL: {url_v10}")
+    try:
+        req = urllib.request.Request(url_v10, headers=_HEADERS)
+        with urllib.request.urlopen(req, timeout=60, context=_SSL_CTX) as resp:
+            raw = resp.read()
+        return _parse_tiles(raw)
+    except Exception as e:
+        print(f"[pl_downloader] WFS 1.0 chyba ({type_name}): {e}")
+
+    return []
+
 
 
 def _query_tiles(wfs_url: str, years: list[int],
@@ -157,23 +183,8 @@ def _query_tiles(wfs_url: str, years: list[int],
     """
     Prochází roky od nejnovějšího a sbírá dlaždice pokrývající bbox.
     Každá dlaždice se započítá jen jednou (preferuje novější rok).
+    Jakmile najde dlaždice v daném roce, přestane (nejnovější data stačí).
     """
-    # Zjisti dostupné TypeNames z GetCapabilities
-    available = _get_available_type_names(wfs_url)
-    if available:
-        # Filtruj roky podle skutečně dostupných vrstev
-        valid_years = []
-        for y in years:
-            tn = f"gugik:{type_prefix}{y}"
-            if any(tn in a or str(y) in a for a in available):
-                valid_years.append(y)
-        if valid_years:
-            years = valid_years
-            print(f"[pl_downloader] Dostupné roky pro {type_prefix}: {years}")
-        else:
-            # GetCapabilities vrátil jiné názvy — zkus všechny roky stejně
-            print(f"[pl_downloader] Žádné odpovídající TypeNames pro {type_prefix}, zkouším všechny roky")
-
     seen_names = set()
     all_tiles = []
 
@@ -191,6 +202,8 @@ def _query_tiles(wfs_url: str, years: list[int],
             all_tiles.extend(new_tiles)
             if progress_cb:
                 progress_cb(f"  rok {year}: {len(new_tiles)} nových dlaždic")
+            # Máme data z nejnovějšího dostupného roku — stop
+            break
 
     return all_tiles
 
