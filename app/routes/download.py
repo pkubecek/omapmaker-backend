@@ -1,53 +1,57 @@
 """
-routes/download.py — stahování dat z ČÚZK ATOM a polského GUGiK jako background job.
-
-Endpointy:
-  POST /api/download/cuzk          — spustí stahování ČR, vrátí download_id
-  GET  /api/download/cuzk/{id}     — stav stahování
-  GET  /api/download/cuzk/{id}/dmr — stáhne DMR soubor
-  GET  /api/download/cuzk/{id}/dmp — stáhne DMP soubor
-
-  POST /api/download/poland          — spustí stahování PL, vrátí download_id
-  GET  /api/download/poland/{id}     — stav stahování
-  GET  /api/download/poland/{id}/dmr — stáhne DTM soubor (LAZ)
-  GET  /api/download/poland/{id}/dmp — stáhne DSM soubor (LAZ, pokud dostupný)
+routes/download.py — stahování dat z ČÚZK, GUGiK (Polsko) a BEV (Rakousko) jako background job.
 """
 import os
 import uuid
 import json
 import threading
-import ssl
-import urllib.request
-import xml.etree.ElementTree as ET
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from ..core.downloader import download_cuzk as _download_cuzk
 from ..core.poland_downloader import download_poland as _download_poland
+from ..core.austria_downloader import download_austria as _download_austria
 
 router = APIRouter()
 
-DOWNLOADS_DIR = os.environ.get("OMAPMAKER_JOBS_DIR", "./jobs") + "/cuzk"
-os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_status_helpers(base_dir: str):
+    os.makedirs(base_dir, exist_ok=True)
+
+    def status_path(dl_id):
+        return os.path.join(base_dir, dl_id, "status.json")
+
+    def read_status(dl_id):
+        p = status_path(dl_id)
+        if not os.path.exists(p):
+            return None
+        with open(p) as f:
+            return json.load(f)
+
+    def write_status(dl_id, data):
+        p = status_path(dl_id)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w") as f:
+            json.dump(data, f)
+
+    return read_status, write_status
 
 
-def _status_path(dl_id):
-    return os.path.join(DOWNLOADS_DIR, dl_id, "status.json")
+JOBS_BASE = os.environ.get("OMAPMAKER_JOBS_DIR", "./jobs")
 
-def _read_status(dl_id):
-    p = _status_path(dl_id)
-    if not os.path.exists(p):
-        return None
-    with open(p) as f:
-        return json.load(f)
+_cuzk_read, _cuzk_write = _make_status_helpers(JOBS_BASE + "/cuzk")
+_pl_read,   _pl_write   = _make_status_helpers(JOBS_BASE + "/poland")
+_at_read,   _at_write   = _make_status_helpers(JOBS_BASE + "/austria")
 
-def _write_status(dl_id, data):
-    p = _status_path(dl_id)
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    with open(p, "w") as f:
-        json.dump(data, f)
 
+# ---------------------------------------------------------------------------
+# Pydantic models
+# ---------------------------------------------------------------------------
 
 class BboxModel(BaseModel):
     min_lat: float
@@ -61,56 +65,42 @@ class CuzkRequest(BaseModel):
 
 class PolandRequest(BaseModel):
     bbox: BboxModel
-    use_lidar_point_cloud: bool = True  # True = LAZ, False = NMT rastr (rychlejší)
+    use_lidar_point_cloud: bool = True
+
+class AustriaRequest(BaseModel):
+    bbox: BboxModel
 
 
-# ============================================================
-# ČÚZK (Česká republika)
-# ============================================================
+# ---------------------------------------------------------------------------
+# Generic background runner
+# ---------------------------------------------------------------------------
 
-@router.post("/download/cuzk")
-async def start_cuzk_download(req: CuzkRequest):
-    """Spustí stahování ČÚZK na pozadí, vrátí download_id."""
-    dl_id = str(uuid.uuid4())[:8]
-    out_dir = os.path.join(DOWNLOADS_DIR, dl_id)
-    os.makedirs(out_dir, exist_ok=True)
-
-    _write_status(dl_id, {
-        "status": "running",
-        "progress": 0,
-        "step": "Spouštím stahování...",
-        "dmr_path": None,
-        "dmp_path": None,
-        "crs": "EPSG:5514",
-        "error": None,
-    })
+def _run_download(dl_id, download_fn, kwargs, read_fn, write_fn, extra_status_fields=None):
+    """Spustí download funkci v threadu, zapisuje stav."""
+    def cb(msg):
+        s = read_fn(dl_id) or {}
+        s["step"] = msg
+        s["progress"] = min(s.get("progress", 0) + 5, 90)
+        write_fn(dl_id, s)
 
     def _run():
-        def cb(msg):
-            s = _read_status(dl_id) or {}
-            s["step"] = msg
-            s["progress"] = min(s.get("progress", 0) + 5, 90)
-            _write_status(dl_id, s)
-
         try:
-            result = _download_cuzk(
-                bbox=req.bbox.model_dump(),
-                dsm_type=req.dsm_type,
-                out_dir=out_dir,
-                progress_cb=cb,
-            )
-            _write_status(dl_id, {
+            result = download_fn(progress_cb=cb, **kwargs)
+            status = {
                 "status": "done",
                 "progress": 100,
                 "step": "Hotovo!",
                 "dmr_path": result.get("dmr_path"),
                 "dmp_path": result.get("dmp_path"),
-                "crs": "EPSG:5514",
+                "crs": result.get("crs"),
                 "error": None,
-            })
+            }
+            if extra_status_fields:
+                status.update(extra_status_fields)
+            write_fn(dl_id, status)
         except Exception as e:
             import traceback; traceback.print_exc()
-            _write_status(dl_id, {
+            write_fn(dl_id, {
                 "status": "error",
                 "progress": 0,
                 "step": f"Chyba: {e}",
@@ -121,211 +111,113 @@ async def start_cuzk_download(req: CuzkRequest):
             })
 
     threading.Thread(target=_run, daemon=True).start()
-    return {"download_id": dl_id}
 
+
+def _file_response(read_fn, dl_id, field, label):
+    s = read_fn(dl_id)
+    if s is None:
+        raise HTTPException(status_code=404, detail="Download nenalezen.")
+    if s["status"] != "done":
+        raise HTTPException(status_code=425, detail="Stahování ještě neskončilo.")
+    path = s.get(field)
+    if not path or not os.path.exists(path):
+        raise HTTPException(status_code=404, detail=f"{label} soubor nenalezen.")
+    return FileResponse(path, media_type="application/octet-stream",
+                        filename=os.path.basename(path))
+
+
+# ---------------------------------------------------------------------------
+# ČÚZK (Česká republika)
+# ---------------------------------------------------------------------------
+
+@router.post("/download/cuzk")
+async def start_cuzk_download(req: CuzkRequest):
+    dl_id = str(uuid.uuid4())[:8]
+    out_dir = os.path.join(JOBS_BASE, "cuzk", dl_id)
+    os.makedirs(out_dir, exist_ok=True)
+    _cuzk_write(dl_id, {"status": "running", "progress": 0, "step": "Spouštím stahování...",
+                         "dmr_path": None, "dmp_path": None, "crs": "EPSG:5514", "error": None})
+    _run_download(dl_id, _download_cuzk,
+                  {"bbox": req.bbox.model_dump(), "dsm_type": req.dsm_type, "out_dir": out_dir},
+                  _cuzk_read, _cuzk_write)
+    return {"download_id": dl_id}
 
 @router.get("/download/cuzk/{dl_id}")
 async def get_cuzk_status(dl_id: str):
-    s = _read_status(dl_id)
+    s = _cuzk_read(dl_id)
     if s is None:
         raise HTTPException(status_code=404, detail="Download nenalezen.")
     return {"download_id": dl_id, **s}
-
 
 @router.get("/download/cuzk/{dl_id}/dmr")
 async def get_cuzk_dmr(dl_id: str):
-    s = _read_status(dl_id)
-    if s is None:
-        raise HTTPException(status_code=404, detail="Download nenalezen.")
-    if s["status"] != "done":
-        raise HTTPException(status_code=425, detail="Stahování ještě neskončilo.")
-    path = s.get("dmr_path")
-    if not path or not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="DMR soubor nenalezen.")
-    return FileResponse(path, media_type="application/octet-stream",
-                        filename=os.path.basename(path))
-
+    return _file_response(_cuzk_read, dl_id, "dmr_path", "DMR")
 
 @router.get("/download/cuzk/{dl_id}/dmp")
 async def get_cuzk_dmp(dl_id: str):
-    s = _read_status(dl_id)
-    if s is None:
-        raise HTTPException(status_code=404, detail="Download nenalezen.")
-    if s["status"] != "done":
-        raise HTTPException(status_code=425, detail="Stahování ještě neskončilo.")
-    path = s.get("dmp_path")
-    if not path or not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="DMP soubor nenalezen.")
-    return FileResponse(path, media_type="application/octet-stream",
-                        filename=os.path.basename(path))
+    return _file_response(_cuzk_read, dl_id, "dmp_path", "DMP")
 
 
-# ============================================================
+# ---------------------------------------------------------------------------
 # GUGiK (Polsko)
-# ============================================================
+# ---------------------------------------------------------------------------
 
 @router.post("/download/poland")
 async def start_poland_download(req: PolandRequest):
-    """Spustí stahování polských LiDAR/NMT dat na pozadí, vrátí download_id."""
     dl_id = str(uuid.uuid4())[:8]
-    out_dir = os.path.join(DOWNLOADS_DIR, dl_id)
+    out_dir = os.path.join(JOBS_BASE, "poland", dl_id)
     os.makedirs(out_dir, exist_ok=True)
-
-    _write_status(dl_id, {
-        "status": "running",
-        "progress": 0,
-        "step": "Spouštím stahování (PL GUGiK)...",
-        "dmr_path": None,
-        "dmp_path": None,
-        "crs": "EPSG:2180",
-        "error": None,
-        "country": "pl",
-    })
-
-    def _run():
-        step_counter = {"n": 0}
-
-        def cb(msg):
-            step_counter["n"] += 1
-            s = _read_status(dl_id) or {}
-            s["step"] = msg
-            # Progres: 0–90 lineárně (počet kroků neznáme předem)
-            s["progress"] = min(5 + step_counter["n"] * 3, 90)
-            _write_status(dl_id, s)
-
-        try:
-            result = _download_poland(
-                bbox=req.bbox.model_dump(),
-                out_dir=out_dir,
-                use_lidar_point_cloud=req.use_lidar_point_cloud,
-                progress_cb=cb,
-            )
-            _write_status(dl_id, {
-                "status": "done",
-                "progress": 100,
-                "step": "Hotovo!",
-                "dmr_path": result.get("dmr_path"),
-                "dmp_path": result.get("dmp_path") or None,
-                "crs": result.get("crs", "EPSG:2180"),
-                "error": None,
-                "country": "pl",
-            })
-        except Exception as e:
-            import traceback; traceback.print_exc()
-            _write_status(dl_id, {
-                "status": "error",
-                "progress": 0,
-                "step": f"Chyba: {e}",
-                "dmr_path": None,
-                "dmp_path": None,
-                "crs": None,
-                "error": str(e),
-                "country": "pl",
-            })
-
-    threading.Thread(target=_run, daemon=True).start()
+    _pl_write(dl_id, {"status": "running", "progress": 0, "step": "Spouštím stahování z GUGiK...",
+                       "dmr_path": None, "dmp_path": None, "crs": "EPSG:2180", "error": None})
+    _run_download(dl_id, _download_poland,
+                  {"bbox": req.bbox.model_dump(), "use_lidar_point_cloud": req.use_lidar_point_cloud,
+                   "out_dir": out_dir},
+                  _pl_read, _pl_write)
     return {"download_id": dl_id}
-
 
 @router.get("/download/poland/{dl_id}")
 async def get_poland_status(dl_id: str):
-    s = _read_status(dl_id)
+    s = _pl_read(dl_id)
     if s is None:
         raise HTTPException(status_code=404, detail="Download nenalezen.")
     return {"download_id": dl_id, **s}
 
-
 @router.get("/download/poland/{dl_id}/dmr")
 async def get_poland_dmr(dl_id: str):
-    s = _read_status(dl_id)
-    if s is None:
-        raise HTTPException(status_code=404, detail="Download nenalezen.")
-    if s["status"] != "done":
-        raise HTTPException(status_code=425, detail="Stahování ještě neskončilo.")
-    path = s.get("dmr_path")
-    if not path or not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="DTM soubor nenalezen.")
-    return FileResponse(path, media_type="application/octet-stream",
-                        filename=os.path.basename(path))
-
+    return _file_response(_pl_read, dl_id, "dmr_path", "DMR")
 
 @router.get("/download/poland/{dl_id}/dmp")
 async def get_poland_dmp(dl_id: str):
-    s = _read_status(dl_id)
+    return _file_response(_pl_read, dl_id, "dmp_path", "DMP")
+
+
+# ---------------------------------------------------------------------------
+# BEV (Rakousko)
+# ---------------------------------------------------------------------------
+
+@router.post("/download/austria")
+async def start_austria_download(req: AustriaRequest):
+    dl_id = str(uuid.uuid4())[:8]
+    out_dir = os.path.join(JOBS_BASE, "austria", dl_id)
+    os.makedirs(out_dir, exist_ok=True)
+    _at_write(dl_id, {"status": "running", "progress": 0, "step": "Spouštím stahování z BEV...",
+                       "dmr_path": None, "dmp_path": None, "crs": "EPSG:3035", "error": None})
+    _run_download(dl_id, _download_austria,
+                  {"bbox": req.bbox.model_dump(), "out_dir": out_dir},
+                  _at_read, _at_write)
+    return {"download_id": dl_id}
+
+@router.get("/download/austria/{dl_id}")
+async def get_austria_status(dl_id: str):
+    s = _at_read(dl_id)
     if s is None:
         raise HTTPException(status_code=404, detail="Download nenalezen.")
-    if s["status"] != "done":
-        raise HTTPException(status_code=425, detail="Stahování ještě neskončilo.")
-    path = s.get("dmp_path")
-    if not path or not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="DSM soubor nenalezen (nebo nebyl dostupný).")
-    return FileResponse(path, media_type="application/octet-stream",
-                        filename=os.path.basename(path))
+    return {"download_id": dl_id, **s}
 
+@router.get("/download/austria/{dl_id}/dmr")
+async def get_austria_dmr(dl_id: str):
+    return _file_response(_at_read, dl_id, "dmr_path", "DTM")
 
-# ============================================================
-# DEBUG — dočasný endpoint pro diagnostiku WFS
-# GET /api/download/debug/poland-wfs
-# ============================================================
-
-_SSL_CTX_DBG = ssl.create_default_context()
-_SSL_CTX_DBG.check_hostname = False
-_SSL_CTX_DBG.verify_mode = ssl.CERT_NONE
-
-_WFS_ENDPOINTS = {
-    "lidar": "https://mapy.geoportal.gov.pl/wss/service/PZGIK/DanePomiaroweLidarEVRF2007/WFS/Skorowidze",
-    "nmt":   "https://mapy.geoportal.gov.pl/wss/service/PZGIK/NumerycznyModelTerenuEVRF2007/WFS/Skorowidze",
-    "nmpt":  "https://mapy.geoportal.gov.pl/wss/service/PZGIK/NumerycznyModelPowierzchniEVRF2007/WFS/Skorowidze",
-}
-
-@router.get("/download/debug/poland-wfs")
-async def debug_poland_wfs(
-    lat: float = 50.05,
-    lon: float = 19.95,
-    span: float = 0.1,
-):
-    """
-    Diagnostický endpoint.
-    Příklad: /api/download/debug/poland-wfs?lat=50.05&lon=19.95&span=0.1
-    """
-    result = {}
-    headers = {"User-Agent": "OMapMaker/7 diagnostic"}
-
-    for name, wfs_url in _WFS_ENDPOINTS.items():
-        caps_url = f"{wfs_url}?SERVICE=WFS&REQUEST=GetCapabilities"
-        try:
-            req = urllib.request.Request(caps_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=20, context=_SSL_CTX_DBG) as resp:
-                raw = resp.read().decode("utf-8", errors="replace")
-            root = ET.fromstring(raw)
-            type_names = [
-                el.text.strip()
-                for el in root.iter()
-                if (el.tag.endswith("}Name") or el.tag == "Name")
-                and el.text and ":" in el.text
-            ]
-            result[name] = {"caps_ok": True, "type_names": type_names}
-        except Exception as e:
-            result[name] = {"caps_ok": False, "error": str(e)}
-            continue
-
-        # Zkus GetFeature s prvním TypeName
-        if type_names:
-            tn = type_names[0]
-            bbox_str = f"{lon-span},{lat-span},{lon+span},{lat+span},urn:ogc:def:crs:EPSG::4326"
-            feat_url = (
-                f"{wfs_url}?SERVICE=WFS&REQUEST=GetFeature&VERSION=2.0.0"
-                f"&TYPENAMES={tn}&SRSNAME=urn:ogc:def:crs:EPSG::4326"
-                f"&BBOX={bbox_str}&COUNT=3"
-            )
-            try:
-                req2 = urllib.request.Request(feat_url, headers=headers)
-                with urllib.request.urlopen(req2, timeout=20, context=_SSL_CTX_DBG) as resp2:
-                    raw2 = resp2.read().decode("utf-8", errors="replace")
-                result[name]["feature_sample"] = raw2[:2000]
-                result[name]["feature_url"] = feat_url
-            except Exception as e2:
-                result[name]["feature_error"] = str(e2)
-                result[name]["feature_url"] = feat_url
-
-    return JSONResponse(result)
+@router.get("/download/austria/{dl_id}/dmp")
+async def get_austria_dmp(dl_id: str):
+    return _file_response(_at_read, dl_id, "dmp_path", "DSM")
