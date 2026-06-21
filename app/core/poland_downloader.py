@@ -99,11 +99,9 @@ def _wfs_get_feature(wfs_url: str, type_name: str,
 
     _DL_EXTS = (".laz", ".las", ".zip", ".tif", ".tiff", ".asc", ".xyz")
 
-    # Skutečný clip bbox bez bufferu pro filtrování GML features
-    try:
-        clip_x0, clip_y0, clip_x1, clip_y1 = _bbox_wgs84_to_2180(bbox_wgs84)
-    except Exception:
-        clip_x0, clip_y0, clip_x1, clip_y1 = bx0, by0, bx1, by1
+    # clip_x0/x1 = easting rozsah, clip_y0/y1 = northing rozsah
+    # (z _bbox_wgs84_to_2180: vrací easting_min, northing_min, easting_max, northing_max)
+    clip_east0, clip_north0, clip_east1, clip_north1 = _bbox_wgs84_to_2180(bbox_wgs84)
 
     def _bbox_from_gml_coords(coords_text: str, swap_xy: bool = False):
         """Parsuj souřadnice z gml:coordinates nebo gml:posList, vrať (x0,y0,x1,y1)."""
@@ -142,14 +140,17 @@ def _wfs_get_feature(wfs_url: str, type_name: str,
         GML32 = "http://www.opengis.net/gml/3.2"
 
         def _test_bbox(fx0, fy0, fx1, fy1) -> bool | None:
-            """Vrátí True/False pokud souřadnice vypadají jako EPSG:2180, jinak None."""
-            # EPSG:2180: X (easting) 150000–950000, Y (northing) 100000–850000
-            # Obě souřadnice musí být v realistickém rozsahu pro Polsko
+            """Vrátí True/False pokud souřadnice vypadají jako EPSG:2180, jinak None.
+            GML Envelope v EPSG:2180: lowerCorner = 'northing easting'
+            → fx0=northing_min, fy0=easting_min
+            """
             x_ok = 100000 < fx0 < 1000000 and 100000 < fx1 < 1000000
             y_ok = 50000 < fy0 < 900000 and 50000 < fy1 < 900000
             if x_ok and y_ok:
-                return (fx1 >= clip_x0 and fx0 <= clip_x1 and
-                        fy1 >= clip_y0 and fy0 <= clip_y1)
+                fn0, fn1 = fx0, fx1  # northing
+                fe0, fe1 = fy0, fy1  # easting
+                return (fn1 >= clip_north0 and fn0 <= clip_north1 and
+                        fe1 >= clip_east0  and fe0 <= clip_east1)
             return None
 
         for ns in [GML, GML32]:
