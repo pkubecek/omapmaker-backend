@@ -94,7 +94,7 @@ def _wfs_get_feature(wfs_url: str, type_name: str,
         bx0, by0, bx1, by1 = mn_lon, mn_lat, mx_lon, mx_lat
 
     # Malý buffer 200m pro edge dlaždice
-    BUFFER = 200
+    BUFFER = 50
     bx0 -= BUFFER; by0 -= BUFFER; bx1 += BUFFER; by1 += BUFFER
 
     _DL_EXTS = (".laz", ".las", ".zip", ".tif", ".tiff", ".asc", ".xyz")
