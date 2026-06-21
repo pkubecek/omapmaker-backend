@@ -540,6 +540,8 @@ def _merge_laz_epsg2180(input_paths: list, output_path: str,
                         cy = np.array(chunk.y)
                         cz = np.array(chunk.z)
                         cc = np.array(chunk.classification)
+                        # GUGiK LAZ: cx=northing, cy=easting
+                        # cn0/cn1 = northing clip, ce0/ce1 = easting clip
                         m = (cx >= cn0) & (cx <= cn1) & (cy >= ce0) & (cy <= ce1)
                         if not np.any(m):
                             continue
@@ -641,13 +643,10 @@ def _merge_laz_dsm_epsg2180(input_paths: list, output_path: str,
                         cy = np.array(chunk.y)
                         cz = np.array(chunk.z)
                         cc = np.array(chunk.classification)
-                        # Debug první chunk
-                        if total_written == 0 and len(cx) > 0:
-                            print(f"[pl_downloader] DSM debug: cx={cx[0]:.0f}..{cx[-1]:.0f}, cy={cy[0]:.0f}..{cy[-1]:.0f}")
-                            print(f"[pl_downloader] DSM debug: cn0={cn0:.0f},cn1={cn1:.0f}, ce0={ce0:.0f},ce1={ce1:.0f}")
-                            print(f"[pl_downloader] DSM debug: classifications unique={np.unique(cc)}")
-                        # bbox filter
-                        m = (cx >= cn0) & (cx <= cn1) & (cy >= ce0) & (cy <= ce1)
+                        # cx=easting, cy=northing (po swapu při zápisu DTM)
+                        # Ale DSM čte raw LAZ kde cx=northing, cy=easting (GUGiK styl)
+                        # cn0/cn1 = northing clip, ce0/ce1 = easting clip
+                        m = (cy >= cn0) & (cy <= cn1) & (cx >= ce0) & (cx <= ce1)
                         # DSM: vše kromě noise (7) a unclassified který je pod zemí
                         # Ponecháme: 1 (unclass), 3 (low veg), 4 (med veg), 5 (high veg),
                         #             6 (building), 9 (water), 2 (ground) jako podádní body
