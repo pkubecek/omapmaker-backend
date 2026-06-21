@@ -422,8 +422,9 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
             "intermittent": True, "covered": True, "place": True, "emergency": True,
         }
         gdf_osm = ox.features_from_bbox((mn_lon, mn_lat, mx_lon, mx_lat), tags=tags)
+        cb(8, f"OSM staženo: {len(gdf_osm)} prvků, CRS před to_crs: {gdf_osm.crs}")
         gdf_osm = gdf_osm.to_crs(CURRENT_CRS)
-        cb(8, f"OSM staženo: {len(gdf_osm)} prvků")
+        cb(8, f"OSM bounds po to_crs({CURRENT_CRS}): {gdf_osm.total_bounds}")
     except Exception as e:
         cb(8, f"Varování OSM: {e}")
 
