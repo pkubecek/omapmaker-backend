@@ -522,8 +522,8 @@ def _merge_laz_epsg2180(input_paths: list, output_path: str,
         for path in input_paths:
             with laspy.open(path) as fh:
                 hdr = fh.header
-                global_min_x = min(global_min_x, float(hdr.y_min))
-                global_min_y = min(global_min_y, float(hdr.x_min))
+                global_min_x = min(global_min_x, float(hdr.x_min))
+                global_min_y = min(global_min_y, float(hdr.y_min))
                 global_min_z = min(global_min_z, float(hdr.z_min))
         out_header.offsets = np.array([global_min_x, global_min_y, global_min_z])
 
@@ -540,16 +540,15 @@ def _merge_laz_epsg2180(input_paths: list, output_path: str,
                         cy = np.array(chunk.y)
                         cz = np.array(chunk.z)
                         cc = np.array(chunk.classification)
-                        # GUGiK LAZ: cx=northing, cy=easting
-                        # cn0/cn1 = northing clip, ce0/ce1 = easting clip
-                        m = (cx >= cn0) & (cx <= cn1) & (cy >= ce0) & (cy <= ce1)
+                        # GUGiK LAZ: cx=easting, cy=northing
+                        # ce0/ce1 = easting clip, cn0/cn1 = northing clip
+                        m = (cx >= ce0) & (cx <= ce1) & (cy >= cn0) & (cy <= cn1)
                         if not np.any(m):
                             continue
                         cx, cy, cz, cc = cx[m], cy[m], cz[m], cc[m]
                         out_chunk = laspy.ScaleAwarePointRecord.zeros(len(cx), header=out_header)
-                        # GUGiK LAZ: x=northing, y=easting — prohoď na x=easting, y=northing
-                        out_chunk.x = cy
-                        out_chunk.y = cx
+                        out_chunk.x = cx
+                        out_chunk.y = cy
                         out_chunk.z = cz
                         out_chunk.classification = cc
                         out_fh.write_points(out_chunk)
@@ -568,9 +567,8 @@ def _merge_laz_epsg2180(input_paths: list, output_path: str,
                         for chunk in fh.chunk_iterator(CHUNK_SIZE):
                             out_chunk = laspy.ScaleAwarePointRecord.zeros(
                                 len(chunk.x), header=out_header)
-                            # swap i pro fallback merge
-                            out_chunk.x = np.array(chunk.y)
-                            out_chunk.y = np.array(chunk.x)
+                            out_chunk.x = np.array(chunk.x)
+                            out_chunk.y = np.array(chunk.y)
                             out_chunk.z = np.array(chunk.z)
                             out_chunk.classification = np.array(chunk.classification)
                             out_fh.write_points(out_chunk)
@@ -625,8 +623,8 @@ def _merge_laz_dsm_epsg2180(input_paths: list, output_path: str,
         for path in input_paths:
             with laspy.open(path) as fh:
                 hdr = fh.header
-                global_min_x = min(global_min_x, float(hdr.y_min))
-                global_min_y = min(global_min_y, float(hdr.x_min))
+                global_min_x = min(global_min_x, float(hdr.x_min))
+                global_min_y = min(global_min_y, float(hdr.y_min))
                 global_min_z = min(global_min_z, float(hdr.z_min))
         out_header.offsets = np.array([global_min_x, global_min_y, global_min_z])
 
@@ -643,10 +641,9 @@ def _merge_laz_dsm_epsg2180(input_paths: list, output_path: str,
                         cy = np.array(chunk.y)
                         cz = np.array(chunk.z)
                         cc = np.array(chunk.classification)
-                        # cx=easting, cy=northing (po swapu při zápisu DTM)
-                        # Ale DSM čte raw LAZ kde cx=northing, cy=easting (GUGiK styl)
-                        # cn0/cn1 = northing clip, ce0/ce1 = easting clip
-                        m = (cy >= cn0) & (cy <= cn1) & (cx >= ce0) & (cx <= ce1)
+                        # GUGiK LAZ: cx=easting, cy=northing
+                        # ce0/ce1 = easting clip, cn0/cn1 = northing clip
+                        m = (cx >= ce0) & (cx <= ce1) & (cy >= cn0) & (cy <= cn1)
                         # DSM: vše kromě noise (7) a unclassified který je pod zemí
                         # Ponecháme: 1 (unclass), 3 (low veg), 4 (med veg), 5 (high veg),
                         #             6 (building), 9 (water), 2 (ground) jako podádní body
