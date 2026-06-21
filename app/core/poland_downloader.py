@@ -504,8 +504,8 @@ def _merge_laz_epsg2180(input_paths: list, output_path: str,
         for path in input_paths:
             with laspy.open(path) as fh:
                 hdr = fh.header
-                global_min_x = min(global_min_x, float(hdr.x_min))
-                global_min_y = min(global_min_y, float(hdr.y_min))
+                global_min_x = min(global_min_x, float(hdr.y_min))
+                global_min_y = min(global_min_y, float(hdr.x_min))
                 global_min_z = min(global_min_z, float(hdr.z_min))
         out_header.offsets = np.array([global_min_x, global_min_y, global_min_z])
 
@@ -527,8 +527,9 @@ def _merge_laz_epsg2180(input_paths: list, output_path: str,
                             continue
                         cx, cy, cz, cc = cx[m], cy[m], cz[m], cc[m]
                         out_chunk = laspy.ScaleAwarePointRecord.zeros(len(cx), header=out_header)
-                        out_chunk.x = cx
-                        out_chunk.y = cy
+                        # GUGiK LAZ: x=northing, y=easting — prohoď na x=easting, y=northing
+                        out_chunk.x = cy
+                        out_chunk.y = cx
                         out_chunk.z = cz
                         out_chunk.classification = cc
                         out_fh.write_points(out_chunk)
@@ -547,8 +548,9 @@ def _merge_laz_epsg2180(input_paths: list, output_path: str,
                         for chunk in fh.chunk_iterator(CHUNK_SIZE):
                             out_chunk = laspy.ScaleAwarePointRecord.zeros(
                                 len(chunk.x), header=out_header)
-                            out_chunk.x = np.array(chunk.x)
-                            out_chunk.y = np.array(chunk.y)
+                            # swap i pro fallback merge
+                            out_chunk.x = np.array(chunk.y)
+                            out_chunk.y = np.array(chunk.x)
                             out_chunk.z = np.array(chunk.z)
                             out_chunk.classification = np.array(chunk.classification)
                             out_fh.write_points(out_chunk)
@@ -603,8 +605,8 @@ def _merge_laz_dsm_epsg2180(input_paths: list, output_path: str,
         for path in input_paths:
             with laspy.open(path) as fh:
                 hdr = fh.header
-                global_min_x = min(global_min_x, float(hdr.x_min))
-                global_min_y = min(global_min_y, float(hdr.y_min))
+                global_min_x = min(global_min_x, float(hdr.y_min))
+                global_min_y = min(global_min_y, float(hdr.x_min))
                 global_min_z = min(global_min_z, float(hdr.z_min))
         out_header.offsets = np.array([global_min_x, global_min_y, global_min_z])
 
