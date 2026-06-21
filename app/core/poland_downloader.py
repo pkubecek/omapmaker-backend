@@ -719,16 +719,33 @@ def download_poland(
             bbox_wgs84, progress_cb=cb,
         )
         if lidar_tiles:
-            cb(f"Stahuju {len(lidar_tiles)} LiDAR dlaždic...")
-            for i, tile in enumerate(lidar_tiles, 1):
-                cb(f"  LiDAR {i}/{len(lidar_tiles)}: {tile['name']}")
+            cb(f"Stahuju {len(lidar_tiles)} LiDAR dlaždic (paralelně)...")
+            import threading
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            dtm_files_lock = threading.Lock()
+
+            def _download_lidar_tile(args):
+                i, tile = args
                 ext = os.path.splitext(tile["url"])[1].lower()
                 dest = os.path.join(dtm_raw_dir, tile["name"] + (ext if ext else ".laz"))
-                if _download_file(tile["url"], dest, cb):
+                cb(f"  LiDAR {i}/{len(lidar_tiles)}: {tile['name']}")
+                if _download_file(tile["url"], dest):
                     if ext == ".zip":
-                        dtm_files.extend(_extract_if_zip(dest, dtm_raw_dir))
+                        return _extract_if_zip(dest, dtm_raw_dir)
                     else:
-                        dtm_files.append(dest)
+                        return [dest]
+                return []
+
+            MAX_WORKERS = min(4, len(lidar_tiles))
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                futures = {executor.submit(_download_lidar_tile, (i, tile)): tile
+                           for i, tile in enumerate(lidar_tiles, 1)}
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result:
+                        with dtm_files_lock:
+                            dtm_files.extend(result)
         else:
             cb("LiDAR dlaždice nenalezeny, zkouším NMT rastr...")
             use_lidar_point_cloud = False
@@ -750,18 +767,30 @@ def download_poland(
                 bbox_wgs84, progress_cb=cb,
             )
 
-        cb(f"Stahuju {len(nmt_tiles)} NMT dlaždic...")
+        cb(f"Stahuju {len(nmt_tiles)} NMT dlaždic (paralelně)...")
         nmt_tif_files = []
-        for i, tile in enumerate(nmt_tiles, 1):
-            cb(f"  NMT {i}/{len(nmt_tiles)}: {tile['name']}")
+        nmt_lock = threading.Lock()
+
+        def _download_nmt_tile(args):
+            i, tile = args
             ext = os.path.splitext(tile["url"])[1].lower()
             dest = os.path.join(dtm_raw_dir, tile["name"] + (ext if ext else ".tif"))
-            if _download_file(tile["url"], dest, cb):
+            cb(f"  NMT {i}/{len(nmt_tiles)}: {tile['name']}")
+            if _download_file(tile["url"], dest):
                 if ext == ".zip":
-                    extracted = _extract_if_zip(dest, dtm_raw_dir)
-                    nmt_tif_files.extend(extracted)
+                    return _extract_if_zip(dest, dtm_raw_dir)
                 elif ext in (".tif", ".tiff", ".asc"):
-                    nmt_tif_files.append(dest)
+                    return [dest]
+            return []
+
+        with ThreadPoolExecutor(max_workers=min(4, max(1, len(nmt_tiles)))) as executor:
+            futures = {executor.submit(_download_nmt_tile, (i, tile)): tile
+                       for i, tile in enumerate(nmt_tiles, 1)}
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    with nmt_lock:
+                        nmt_tif_files.extend(result)
 
         if not nmt_tif_files:
             raise RuntimeError("Žádné DTM dlaždice pro zadanou oblast. Je oblast v Polsku?")
