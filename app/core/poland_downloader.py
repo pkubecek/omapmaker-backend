@@ -141,16 +141,15 @@ def _wfs_get_feature(wfs_url: str, type_name: str,
 
         def _test_bbox(fx0, fy0, fx1, fy1) -> bool | None:
             """Vrátí True/False pokud souřadnice vypadají jako EPSG:2180, jinak None.
-            GML Envelope v EPSG:2180: lowerCorner = 'northing easting'
-            → fx0=northing_min, fy0=easting_min
+            GML Envelope v EPSG:2180: lowerCorner = 'easting northing'
+            → fx0=easting_min, fy0=northing_min
+            clip_east0/1 a clip_north0/1 jsou z _bbox_wgs84_to_2180 (easting, northing).
             """
             x_ok = 100000 < fx0 < 1000000 and 100000 < fx1 < 1000000
             y_ok = 50000 < fy0 < 900000 and 50000 < fy1 < 900000
             if x_ok and y_ok:
-                fn0, fn1 = fx0, fx1  # northing
-                fe0, fe1 = fy0, fy1  # easting
-                return (fn1 >= clip_north0 and fn0 <= clip_north1 and
-                        fe1 >= clip_east0  and fe0 <= clip_east1)
+                return (fx1 >= clip_east0  and fx0 <= clip_east1 and
+                        fy1 >= clip_north0 and fy0 <= clip_north1)
             return None
 
         for ns in [GML, GML32]:
@@ -229,6 +228,8 @@ def _wfs_get_feature(wfs_url: str, type_name: str,
             import xml.etree.ElementTree as ET2
             first_xml = ET2.tostring(members[0], encoding="unicode")
             print(f"[pl_downloader] members={len(members)}, první feature XML: {first_xml[:600]}")
+            print(f"[pl_downloader] clip: east={clip_east0:.0f}..{clip_east1:.0f}, north={clip_north0:.0f}..{clip_north1:.0f}")
+            print(f"[pl_downloader] první feature overlaps={_feature_overlaps_bbox(members[0])}")
         else:
             # Vypiš všechny tagy v root pro diagnostiku
             all_tags = set(el.tag for el in root.iter())
