@@ -724,12 +724,13 @@ def download_poland(
             from concurrent.futures import ThreadPoolExecutor, as_completed
 
             dtm_files_lock = threading.Lock()
+            completed = [0]
 
             def _download_lidar_tile(args):
                 i, tile = args
                 ext = os.path.splitext(tile["url"])[1].lower()
                 dest = os.path.join(dtm_raw_dir, tile["name"] + (ext if ext else ".laz"))
-                cb(f"  LiDAR {i}/{len(lidar_tiles)}: {tile['name']}")
+                print(f"[pl_downloader]   LiDAR {i}/{len(lidar_tiles)}: {tile['name']}")
                 if _download_file(tile["url"], dest):
                     if ext == ".zip":
                         return _extract_if_zip(dest, dtm_raw_dir)
@@ -746,6 +747,8 @@ def download_poland(
                     if result:
                         with dtm_files_lock:
                             dtm_files.extend(result)
+                    completed[0] += 1
+                    cb(f"Staženo {completed[0]}/{len(lidar_tiles)} LiDAR dlaždic...")
         else:
             cb("LiDAR dlaždice nenalezeny, zkouším NMT rastr...")
             use_lidar_point_cloud = False
@@ -770,12 +773,13 @@ def download_poland(
         cb(f"Stahuju {len(nmt_tiles)} NMT dlaždic (paralelně)...")
         nmt_tif_files = []
         nmt_lock = threading.Lock()
+        nmt_completed = [0]
 
         def _download_nmt_tile(args):
             i, tile = args
             ext = os.path.splitext(tile["url"])[1].lower()
             dest = os.path.join(dtm_raw_dir, tile["name"] + (ext if ext else ".tif"))
-            cb(f"  NMT {i}/{len(nmt_tiles)}: {tile['name']}")
+            print(f"[pl_downloader]   NMT {i}/{len(nmt_tiles)}: {tile['name']}")
             if _download_file(tile["url"], dest):
                 if ext == ".zip":
                     return _extract_if_zip(dest, dtm_raw_dir)
@@ -791,6 +795,8 @@ def download_poland(
                 if result:
                     with nmt_lock:
                         nmt_tif_files.extend(result)
+                nmt_completed[0] += 1
+                cb(f"Staženo {nmt_completed[0]}/{len(nmt_tiles)} NMT dlaždic...")
 
         if not nmt_tif_files:
             raise RuntimeError("Žádné DTM dlaždice pro zadanou oblast. Je oblast v Polsku?")
