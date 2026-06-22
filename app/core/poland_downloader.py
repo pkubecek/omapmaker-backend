@@ -502,8 +502,8 @@ def _merge_laz_epsg2180(input_paths: list, output_path: str,
     # always_xy=True: xs=easting, ys=northing
     # GUGiK LAZ: chunk.x = northing, chunk.y = easting (osa order EPSG:2180)
     # Proto clip_cx (northing) porovnáváme s ys, clip_cy (easting) s xs
-    cn0, cn1 = min(ys) - 100, max(ys) + 100  # northing rozsah pro chunk.x
-    ce0, ce1 = min(xs) - 100, max(xs) + 100  # easting rozsah pro chunk.y
+    cn0, cn1 = min(ys) - 500, max(ys) + 500  # northing rozsah pro chunk.x
+    ce0, ce1 = min(xs) - 500, max(xs) + 500  # easting rozsah pro chunk.y
 
     if progress_cb:
         progress_cb(f"  Clip bbox EPSG:2180: E={ce0:.0f}..{ce1:.0f}, N={cn0:.0f}..{cn1:.0f}")
@@ -532,6 +532,7 @@ def _merge_laz_epsg2180(input_paths: list, output_path: str,
         total_written = 0
         CHUNK_SIZE = 200_000
 
+        _debug_done = False
         with laspy.open(output_path, mode="w", header=out_header) as out_fh:
             for path in input_paths:
                 if progress_cb:
@@ -542,6 +543,9 @@ def _merge_laz_epsg2180(input_paths: list, output_path: str,
                         cy = np.array(chunk.y)
                         cz = np.array(chunk.z)
                         cc = np.array(chunk.classification)
+                        if not _debug_done:
+                            print(f"[pl_downloader] CLIP DEBUG: cx[0]={cx[0]:.0f}, cy[0]={cy[0]:.0f}, cn0={cn0:.0f}, cn1={cn1:.0f}, ce0={ce0:.0f}, ce1={ce1:.0f}")
+                            _debug_done = True
                         # GUGiK LAZ: chunk.x=northing, chunk.y=easting
                         # cn0/cn1 = northing clip (pro cx), ce0/ce1 = easting clip (pro cy)
                         m = (cx >= cn0) & (cx <= cn1) & (cy >= ce0) & (cy <= ce1)
@@ -608,8 +612,8 @@ def _merge_laz_dsm_epsg2180(input_paths: list, output_path: str,
     xs, ys = t.transform([mn_lon, mx_lon, mn_lon, mx_lon],
                           [mn_lat, mn_lat, mx_lat, mx_lat])
     # GUGiK LAZ: chunk.x = northing, chunk.y = easting
-    cn0, cn1 = min(ys) - 100, max(ys) + 100  # northing pro chunk.x
-    ce0, ce1 = min(xs) - 100, max(xs) + 100  # easting pro chunk.y
+    cn0, cn1 = min(ys) - 500, max(ys) + 500  # northing pro chunk.x
+    ce0, ce1 = min(xs) - 500, max(xs) + 500  # easting pro chunk.y
 
     try:
         with laspy.open(input_paths[0]) as fh_tmp:
