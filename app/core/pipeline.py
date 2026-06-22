@@ -394,6 +394,28 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
     area_km2 = ((global_maxx - global_minx) / 1000) * ((global_maxy - global_miny) / 1000)
     cb(4, f"Oblast: {(global_maxx-global_minx)/1000:.1f} × {(global_maxy-global_miny)/1000:.1f} km (~{area_km2:.1f} km²)")
 
+    # Pokud máme bbox výběru z frontendu, použij ho pro extent
+    # LAZ bez ořezu pokrývá celou dlaždici GUGiK, ne jen vybranou oblast
+    user_bbox = params.get("bbox")
+    if user_bbox and CURRENT_CRS == "EPSG:2180":
+        try:
+            t_bbox = Transformer.from_crs("EPSG:4326", "EPSG:2180", always_xy=True)
+            xs_b, ys_b = t_bbox.transform(
+                [float(user_bbox["min_lon"]), float(user_bbox["max_lon"]),
+                 float(user_bbox["min_lon"]), float(user_bbox["max_lon"])],
+                [float(user_bbox["min_lat"]), float(user_bbox["min_lat"]),
+                 float(user_bbox["max_lat"]), float(user_bbox["max_lat"])]
+            )
+            global_minx = min(xs_b)
+            global_maxx = max(xs_b)
+            global_miny = min(ys_b)
+            global_maxy = max(ys_b)
+            cb(4, f"Extent z uživatelského bbox: E={global_minx:.0f}..{global_maxx:.0f}, N={global_miny:.0f}..{global_maxy:.0f}")
+            area_km2 = ((global_maxx - global_minx) / 1000) * ((global_maxy - global_miny) / 1000)
+            cb(4, f"Oblast (bbox): {(global_maxx-global_minx)/1000:.1f} × {(global_maxy-global_miny)/1000:.1f} km (~{area_km2:.1f} km²)")
+        except Exception as e:
+            cb(4, f"Varování: bbox transformace selhala ({e}), použiju LAZ header")
+
     # Výpočet dlaždic
     tiles = _compute_tiles(global_minx, global_maxx, global_miny, global_maxy,
                             TILE_SIZE_M, OVERLAP_M)
