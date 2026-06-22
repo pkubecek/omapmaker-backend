@@ -508,6 +508,14 @@ def _merge_laz_epsg2180(input_paths: list, output_path: str,
     if progress_cb:
         progress_cb(f"  Clip bbox EPSG:2180: E={ce0:.0f}..{ce1:.0f}, N={cn0:.0f}..{cn1:.0f}")
 
+    # Debug: prvních 5 bodů z prvního souboru
+    import laspy as _lp
+    with _lp.open(input_paths[0]) as _fh:
+        _chunk = next(_fh.chunk_iterator(5))
+        _xs = [f"{v:.0f}" for v in _chunk.x[:3]]
+        _ys = [f"{v:.0f}" for v in _chunk.y[:3]]
+        print(f"[pl_downloader] DEBUG prvních 3 bodů: x={_xs}, y={_ys}")
+
     try:
         with laspy.open(input_paths[0]) as fh_tmp:
             header_ref = fh_tmp.header

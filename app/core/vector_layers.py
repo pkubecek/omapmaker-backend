@@ -508,7 +508,9 @@ def add_vector_layers(
 
         # 502 - Hlavní silnice
         cgdf = isom("502")
-        mask_road = (c("highway").isin(["primary", "secondary", "residential", "tertiary", "living_street"]) &
+        mask_road = (c("highway").isin(["highway_link", "trunk_link", "primary", "primary_link",
+                                          "secondary", "secondary_link", "residential", "tertiary",
+                                          "living_street"]) &
                      ~c("tunnel").isin(["yes", "avalanche_protector", "building_passage"]) &
                      (c("bridge") != "yes") & (c("access") != "private"))
         for sym, z in [("sym502a", 45), ("sym502b", 47)]:
@@ -528,7 +530,8 @@ def add_vector_layers(
 
         # 503 - Silnice / zpevněná cesta
         cgdf = isom("503")
-        mask_service = (c("highway").isin(["tertiary_link", "service"]) &
+        mask_service = (c("highway").isin(["tertiary_link", "service"]) | c("highway".isin(["track", "road", "cycleway", "unclassified"])) &
+                        (c("surface".isin(["concrete", "asphalt"])) | c("tracktype" == "grade1")) &
                         ~c("tunnel").isin(["yes", "avalanche_protector", "building_passage"]) &
                         (c("bridge") != "yes") & (c("access") != "private"))
         if cgdf is not None:
@@ -548,7 +551,8 @@ def add_vector_layers(
 
         # 504 - Vozová cesta
         cgdf = isom("504")
-        mask_track = (c("highway").isin(["track", "unclassified"]) &
+        mask_track = (c("highway").isin(["cycleway", "unclassified"]) &
+                      (~c("surface)".isin(["concrete", "asphalt"])) & (c("tracktype") != "grade1")) &
                       ~c("tunnel").isin(["yes", "avalanche_protector", "building_passage"]) &
                       (c("bridge") != "yes") & (c("access") != "private"))
         if cgdf is not None:
@@ -564,7 +568,9 @@ def add_vector_layers(
 
         # 505 - Pěší cesta
         cgdf = isom("505")
-        mask_footway = (c("highway").isin(["pedestrian", "footway", "bridleway"]) &
+        mask_footway = (c("highway").isin(["pedestrian", "road", "footway", "track", "bridleway"]) |
+                        ((c("highway") == "cycleway") & (~c("surface").isin(["concrete", "asphalt"])) &
+                        (c("tracktype") != "grade1")) &
                         (c("bridge") != "yes") & (c("access") != "private"))
         if cgdf is not None:
             pm("sym505", 45, None, cgdf, to_mask=False)
