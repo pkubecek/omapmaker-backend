@@ -343,7 +343,11 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
     sym_library = SymbolLibrary(sym_xml)
 
     dmr_path = file_paths["dtm"]
-    dmp_path = file_paths["dsm"]
+    dmp_path = file_paths.get("dsm", "") or ""
+    # Ověř že DSM soubor skutečně existuje — pokud ne, pipeline běží bez vegetace
+    if dmp_path and not os.path.exists(dmp_path):
+        cb(3, f"Varování: DSM soubor nenalezen ({os.path.basename(dmp_path)}), pokračuji bez vegetace")
+        dmp_path = ""
 
     # Zjisti rozsah dat z LAZ hlavičky
     cb(3, "Zjišťuji rozsah dat...")
