@@ -361,6 +361,22 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
         raw_minx, raw_maxx = float(hdr.x_min), float(hdr.x_max)
         raw_miny, raw_maxy = float(hdr.y_min), float(hdr.y_max)
 
+    # Detekce CRS z rozsahu souřadnic — polské LAZ nemají CRS v headeru
+    # EPSG:5514 (S-JTSK): záporné souřadnice
+    # EPSG:2180 (PL-1992): kladné souřadnice ~140k-900k
+    params_crs = CRS.from_string(CURRENT_CRS)
+    if src_crs.equals(CRS.from_epsg(5514)) and raw_minx > 0 and raw_miny > 0:
+        cb(3, f"Detekován EPSG:2180 (PL) z rozsahu souřadnic ({raw_minx:.0f}, {raw_miny:.0f})")
+        src_crs = CRS.from_epsg(2180)
+        CURRENT_CRS = "EPSG:2180"
+        tile_params["crs"] = CURRENT_CRS
+    elif src_crs != params_crs and not src_crs.equals(CRS.from_epsg(5514)):
+        detected = src_crs.to_epsg()
+        if detected:
+            cb(3, f"CRS z LAZ headeru: EPSG:{detected} → přepínám z {CURRENT_CRS}")
+            CURRENT_CRS = f"EPSG:{detected}"
+            tile_params["crs"] = CURRENT_CRS
+
     try:
         dst_crs = CRS.from_string(CURRENT_CRS)
         if src_crs != dst_crs:
@@ -368,6 +384,11 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
             xs, ys = t.transform([raw_minx, raw_maxx], [raw_miny, raw_maxy])
             global_minx, global_maxx = min(xs), max(xs)
             global_miny, global_maxy = min(ys), max(ys)
+        elif CURRENT_CRS == "EPSG:2180" and raw_minx > raw_miny:
+            # GUGiK LAZ: hdr.x=northing (~400-800k), hdr.y=easting (~140-900k)
+            # Pro správný extent: minx=easting=raw_miny, miny=northing=raw_minx
+            global_minx, global_maxx = float(hdr.y_min), float(hdr.y_max)  # easting
+            global_miny, global_maxy = float(hdr.x_min), float(hdr.x_max)  # northing
         else:
             global_minx, global_maxx = raw_minx, raw_maxx
             global_miny, global_maxy = raw_miny, raw_maxy
@@ -406,9 +427,11 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
             "intermittent": True, "covered": True, "place": True, "emergency": True,
         }
         gdf_osm = ox.features_from_bbox((mn_lon, mn_lat, mx_lon, mx_lat), tags=tags)
-        cb(8, f"OSM staženo: {len(gdf_osm)} prvků, CRS před to_crs: {gdf_osm.crs}")
+        cb(8, f"OSM staženo: {len(gdf_osm)} prvků")
+        cb(8, f"OSM bbox WGS84: {mn_lat:.4f}N {mn_lon:.4f}E .. {mx_lat:.4f}N {mx_lon:.4f}E")
         gdf_osm = gdf_osm.to_crs(CURRENT_CRS)
         cb(8, f"OSM bounds po to_crs({CURRENT_CRS}): {gdf_osm.total_bounds}")
+        cb(8, f"LiDAR extent: minx={global_minx:.0f}, maxx={global_maxx:.0f}, miny={global_miny:.0f}, maxy={global_maxy:.0f}")
     except Exception as e:
         cb(8, f"Varování OSM: {e}")
 
