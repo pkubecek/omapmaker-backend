@@ -54,6 +54,13 @@ def load_dmr_grid(dmr_path: str, target_crs_code: str,
         except Exception:
             source_crs = CRS.from_epsg(5514)
 
+        # Detekce CRS z rozsahu souřadnic — GUGiK LAZ nemá CRS v headeru
+        # EPSG:5514 má záporné souřadnice; EPSG:2180 má kladné ~140k-900k
+        hdr = fh.header
+        x_min = float(hdr.x_min)
+        if source_crs.equals(CRS.from_epsg(5514)) and x_min > 0:
+            source_crs = CRS.from_epsg(2180)
+
         try:
             target_crs_obj = CRS.from_string(target_crs_code)
             if source_crs != target_crs_obj:
@@ -154,6 +161,10 @@ def load_dmp_grid(dmp_path: str, grid_x: np.ndarray, grid_y: np.ndarray,
                     source_crs = CRS.from_epsg(5514)
             except Exception:
                 source_crs = CRS.from_epsg(5514)
+
+            # Detekce CRS z souřadnic
+            if source_crs.equals(CRS.from_epsg(5514)) and float(fh.header.x_min) > 0:
+                source_crs = CRS.from_epsg(2180)
 
             try:
                 target_crs_obj = CRS.from_string(target_crs_code)
