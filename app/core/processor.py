@@ -89,7 +89,18 @@ def load_dmr_grid(dmr_path: str, target_crs_code: str,
             # Ořez na bbox dlaždice
             if bbox_clip is not None:
                 bx0, bx1, by0, by1 = bbox_clip
-                m = (cx >= bx0) & (cx <= bx1) & (cy >= by0) & (cy <= by1)
+                # Automatická detekce os: cx může být easting nebo northing
+                # Detekuj podle vzdálenosti od středu bbox
+                if len(cx) > 0:
+                    e_mid = (bx0 + bx1) / 2
+                    n_mid = (by0 + by1) / 2
+                    cx_is_easting = abs(cx[0] - e_mid) < abs(cx[0] - n_mid)
+                    if cx_is_easting:
+                        m = (cx >= bx0) & (cx <= bx1) & (cy >= by0) & (cy <= by1)
+                    else:
+                        m = (cx >= by0) & (cx <= by1) & (cy >= bx0) & (cy <= bx1)
+                else:
+                    m = np.zeros(len(cx), dtype=bool)
                 cx, cy, cz = cx[m], cy[m], cz[m]
             if len(cx) == 0:
                 continue
