@@ -71,6 +71,16 @@ def load_dmr_grid(dmr_path: str, target_crs_code: str,
         total_points = fh.header.point_count
         fraction = min(1.0, MAX_POINTS / total_points) if total_points > 0 else 1.0
 
+        # Automatická detekce záměny os (cx/cy) — udělá se jen JEDNOU za celý
+        # soubor na základě mediánu z prvního neprázdného chunku, ne podle
+        # jediného bodu opakovaně pro každý chunk/dlaždici (to vedlo k tomu,
+        # že se některé dlaždice nesprávně ořízly na prázdno).
+        cx_is_easting = None
+        if bbox_clip is not None:
+            bx0, bx1, by0, by1 = bbox_clip
+            e_mid = (bx0 + bx1) / 2
+            n_mid = (by0 + by1) / 2
+
         for chunk in fh.chunk_iterator(1_000_000):
             clas = np.array(chunk.classification)
             ground_mask = (clas == 2) | (clas == 8)
@@ -88,19 +98,14 @@ def load_dmr_grid(dmr_path: str, target_crs_code: str,
                 cx, cy = transformer.transform(cx, cy)
             # Ořez na bbox dlaždice
             if bbox_clip is not None:
-                bx0, bx1, by0, by1 = bbox_clip
-                # Automatická detekce os: cx může být easting nebo northing
-                # Detekuj podle vzdálenosti od středu bbox
-                if len(cx) > 0:
-                    e_mid = (bx0 + bx1) / 2
-                    n_mid = (by0 + by1) / 2
-                    cx_is_easting = abs(cx[0] - e_mid) < abs(cx[0] - n_mid)
-                    if cx_is_easting:
-                        m = (cx >= bx0) & (cx <= bx1) & (cy >= by0) & (cy <= by1)
-                    else:
-                        m = (cx >= by0) & (cx <= by1) & (cy >= bx0) & (cy <= bx1)
+                if cx_is_easting is None:
+                    n_sample = min(2000, len(cx))
+                    med_x = np.median(cx[:n_sample])
+                    cx_is_easting = abs(med_x - e_mid) < abs(med_x - n_mid)
+                if cx_is_easting:
+                    m = (cx >= bx0) & (cx <= bx1) & (cy >= by0) & (cy <= by1)
                 else:
-                    m = np.zeros(len(cx), dtype=bool)
+                    m = (cx >= by0) & (cx <= by1) & (cy >= bx0) & (cy <= bx1)
                 cx, cy, cz = cx[m], cy[m], cz[m]
             if len(cx) == 0:
                 continue
