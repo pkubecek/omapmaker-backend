@@ -27,6 +27,7 @@ def _clip(gdf, extent):
 def add_vector_layers(
     ax, gdf, extent, zabaged_gdfs, dmr_grid, grid_x, grid_y,
     visibility, isom_gdfs, sym_library: SymbolLibrary, current_crs: str,
+    collector=None,
 ):
     print(f"[vector_layers] extent={extent}")
     print(f"[vector_layers] ZABAGED klíče: {list(zabaged_gdfs.keys())}")
@@ -63,11 +64,14 @@ def add_vector_layers(
         if subset.empty:
             return
         # Pro cliff symboly předej DMR grid pro správný směr fousku
-        if sym_key in _CLIFF_SYMS:
-            plot_symbol(ax, sym_key, subset, zorder, sym_library, current_crs,
-                        dmr_grid=dmr_grid, grid_x=grid_x, grid_y=grid_y)
-        else:
-            plot_symbol(ax, sym_key, subset, zorder, sym_library, current_crs)
+        if ax is not None:
+            if sym_key in _CLIFF_SYMS:
+                plot_symbol(ax, sym_key, subset, zorder, sym_library, current_crs,
+                            dmr_grid=dmr_grid, grid_x=grid_x, grid_y=grid_y)
+            else:
+                plot_symbol(ax, sym_key, subset, zorder, sym_library, current_crs)
+        if collector is not None:
+            collector.collect(sym_key, subset)
 
     if gdf is not None and not gdf.empty:
         gdf = gdf.reset_index(drop=True)

@@ -548,7 +548,47 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
 
     global_extent = (global_minx, global_maxx, global_miny, global_maxy)
 
-    # Render
+    # GPKG collector — vytvořen PŘED render_map, aby ho add_vector_layers
+    # mohl naplnit ve stejném průchodu jako kreslí PNG. Díky tomu GPKG
+    # obsahuje přesně to samé, co se vykreslí (žádná oddělená/neúplná
+    # kopie OSM+ZABAGED+ISOM logiky).
+    collector = OomCollector(current_crs=CURRENT_CRS)
+
+    # Vrstevnice
+    for sym_key, layer_key in [
+        ("sym101", "base"), ("sym102", "major"), ("sym103", "minor")
+    ]:
+        gdf_c = merged["contour_layers"].get(layer_key)
+        if gdf_c is not None and not gdf_c.empty:
+            collector.collect(sym_key, gdf_c)
+
+    # Skály
+    if merged["gdf_rocks"] is not None and not merged["gdf_rocks"].empty:
+        collector.collect("sym201", merged["gdf_rocks"])
+
+    # Mikrotvary
+    if merged["depressions"]:
+        collector.collect("sym111", gpd.GeoDataFrame(
+            geometry=merged["depressions"], crs=CURRENT_CRS))
+    if merged["knolls"]:
+        collector.collect("sym109", gpd.GeoDataFrame(
+            geometry=merged["knolls"], crs=CURRENT_CRS))
+
+    # Vegetace — všechny třídy (z LiDAR rastru, mimo vector_layers.py)
+    VEG_SYM = {
+        "Paseka": "sym403", "Louka": "sym401",
+        "Les": "sym405", "Vysoky_porost": "sym406",
+        "Stredni_porost": "sym408", "Nizky_porost": "sym410",
+    }
+    veg = merged["gdf_vegetation"]
+    if veg is not None and not veg.empty and "class_name" in veg.columns:
+        for class_name, sym_key in VEG_SYM.items():
+            subset = veg[veg["class_name"] == class_name]
+            if not subset.empty:
+                collector.collect(sym_key, subset)
+
+    # Render — add_vector_layers (volaný uvnitř render_map) zároveň
+    # naplní collector přesně tím, co kreslí do PNG (OSM + ZABAGED + ISOM).
     cb(85, "Sestavuji mapu...")
     from .renderer import render_map
     output_png = os.path.join(output_dir, f"{job_id}_OMap.png")
@@ -574,168 +614,22 @@ def run_pipeline(job_id: str, params: dict, file_paths: dict,
         layer_visibility=LAYER_VISIBILITY,
         output_png_path=output_png,
         progress_cb=lambda msg: cb(90, msg),
+        collector=collector,
     )
 
-    # GPKG
+    # ISOM vlastní vrstvy — generický fallback i pro kódy, které
+    # vector_layers.py explicitně neřeší (klíč = název souboru = kód ISOM)
+    for isom_key, gdf_i in isom_gdfs.items():
+        if gdf_i is None or gdf_i.empty:
+            continue
+        clean_key = isom_key.replace(".shp", "").replace(".SHP", "")
+        collector.collect(clean_key, gdf_i)
+
+    # GPKG export
     gpkg_path = None
     cb(95, "Exportuji GPKG...")
     try:
         gpkg_path = os.path.join(output_dir, f"{job_id}_OOM.gpkg")
-        collector = OomCollector(current_crs=CURRENT_CRS)
-
-        # Vrstevnice
-        for sym_key, layer_key in [
-            ("sym101", "base"), ("sym102", "major"), ("sym103", "minor")
-        ]:
-            gdf_c = merged["contour_layers"].get(layer_key)
-            if gdf_c is not None and not gdf_c.empty:
-                collector.collect(sym_key, gdf_c)
-
-        # Skály
-        if merged["gdf_rocks"] is not None and not merged["gdf_rocks"].empty:
-            collector.collect("sym201", merged["gdf_rocks"])
-
-        # Mikrotvary
-        if merged["depressions"]:
-            collector.collect("sym111", gpd.GeoDataFrame(
-                geometry=merged["depressions"], crs=CURRENT_CRS))
-        if merged["knolls"]:
-            collector.collect("sym109", gpd.GeoDataFrame(
-                geometry=merged["knolls"], crs=CURRENT_CRS))
-
-        # Vegetace — všechny třídy
-        VEG_SYM = {
-            "Paseka": "sym403", "Louka": "sym401",
-            "Les": "sym405", "Vysoky_porost": "sym406",
-            "Stredni_porost": "sym408", "Nizky_porost": "sym410",
-        }
-        veg = merged["gdf_vegetation"]
-        if veg is not None and not veg.empty and "class_name" in veg.columns:
-            for class_name, sym_key in VEG_SYM.items():
-                subset = veg[veg["class_name"] == class_name]
-                if not subset.empty:
-                    collector.collect(sym_key, subset)
-
-        # OSM vrstvy — voda, cesty, budovy, umělé prvky
-        if gdf_osm is not None and not gdf_osm.empty:
-            def col(c):
-                import pandas as pd
-                return gdf_osm[c].fillna("") if c in gdf_osm.columns else pd.Series(
-                    [""] * len(gdf_osm), index=gdf_osm.index)
-
-            gdf_lines = gdf_osm[gdf_osm.geometry.geom_type.isin(
-                ["LineString", "MultiLineString"])].copy()
-            gdf_polys = gdf_osm[gdf_osm.geometry.geom_type.isin(
-                ["Polygon", "MultiPolygon"])].copy()
-            gdf_pts = gdf_osm[gdf_osm.geometry.geom_type == "Point"].copy()
-
-            # Voda
-            collector.collect("sym301", gdf_polys[
-                col("natural").isin(["lake", "water"]) |
-                col("water").isin(["lake", "river", "reservoir"])])
-            collector.collect("sym304", gdf_lines[
-                col("waterway").isin(["river", "canal"])])
-            collector.collect("sym305", gdf_lines[
-                col("waterway").isin(["stream", "ditch"])])
-            collector.collect("sym307", gdf_polys[col("wetland") == "reedbed"])
-            collector.collect("sym308", gdf_polys[col("natural") == "wetland"])
-            collector.collect("sym312", gdf_pts[col("natural") == "spring"])
-            collector.collect("sym312", gdf_polys[col("natural") == "spring"])
-
-            # Cesty
-            collector.collect("sym502Da", gdf_lines[col("highway").isin(["motorway", "trunk"])])
-            collector.collect("sym502a", gdf_lines[
-                col("highway").isin(["primary", "secondary", "residential", "tertiary"])])
-            collector.collect("sym503", gdf_lines[col("highway").isin(["service"])])
-            collector.collect("sym504", gdf_lines[col("highway").isin(["track", "unclassified"])])
-            collector.collect("sym505", gdf_lines[
-                col("highway").isin(["footway", "pedestrian", "bridleway"])])
-            collector.collect("sym506", gdf_lines[col("highway") == "path"])
-            collector.collect("sym509a", gdf_lines[col("railway").isin(["rail", "narrow_gauge"])])
-
-            # Budovy a umělé prvky
-            collector.collect("sym521", gdf_polys[
-                col("building").notna() & (col("building") != "")])
-            collector.collect("sym510", gdf_lines[col("power").isin(["line", "minor_line"])])
-            collector.collect("sym513-1a", gdf_lines[col("barrier") == "wall"])
-
-            # Bodové prvky
-            gdf_centroids = gdf_osm.copy()
-            gdf_centroids["geometry"] = gdf_osm.geometry.centroid
-
-            collector.collect("sym312", gdf_centroids[
-                (col("natural") == "spring") & (col("covered") != "yes")])
-            collector.collect("sym417a", gdf_centroids[col("natural") == "tree"])
-            collector.collect("sym417b", gdf_centroids[col("natural") == "tree"])
-            collector.collect("sym205", gdf_centroids[
-                col("natural").isin(["stone", "rock"])])
-            collector.collect("sym524a", gdf_centroids[
-                col("man_made").isin(["tower", "chimney", "water_tower",
-                                       "communications_tower", "mast"])])
-            collector.collect("sym526a", gdf_centroids[
-                col("historic").isin(["memorial", "boundary_stone", "wayside_cross"])])
-            collector.collect("sym311", gdf_centroids[col("natural") == "sinkhole"])
-
-        # ---------------------------------------------------------------------------
-        # ZABAGED vrstvy — mapování dle Katalogu objektů ZABAGED® v4.6
-        # Obsahuje jak nové katalogové názvy, tak staré názvy pro zpětnou
-        # kompatibilitu (uživatelé mohou mít soubory pojmenované oběma způsoby).
-        # ---------------------------------------------------------------------------
-        ZAB_MAP = {
-            # 2. Komunikace
-            "SilniceDalnice":           "sym502Da",  # 2.01
-            "Cesta":                    "sym504",     # 2.03
-            "Pesina":                   "sym506",     # 2.04
-            "Most":                     "sym512",     # 2.08
-            "ZeleznicniTrat":           "sym509a",    # 2.17
-            # 3. Rozvodné sítě
-            "ElektrickeVedeni":         "sym510",     # 3.03
-            # 4. Vodstvo
-            "ZdrojPodzemnichVod":       "sym312",     # 4.01
-            "VodniTok":                 "sym305",     # 4.02
-            "VodniPlocha":              "sym301",     # 4.10
-            "BazinaMocal":              "sym308",     # 4.12
-            # 1. Sídla
-            "BudovaJednotlivaNeboBlokBudov": "sym521",  # 1.02
-            "PovrchTezbaLom":           "sym202",     # 1.06 (nový název)
-            "Lom":                      "sym202",     # 1.06 (starý název)
-            "HradbaValBastaOpevneni":   "sym105-1a",  # 1.22
-            "Zed":                      "sym513-1a",  # 1.23
-            "MohylaPomnikNahrobek":     "sym526a",    # 1.20
-            "RozvalinazRicenina":       "sym523",     # 1.19 (nový název)
-            "ZbytkyBudovy":             "sym523",     # 1.19 (starý název)
-            # 6. Vegetace
-            "TrvalyTravniPorost":       "sym401",     # 6.06
-            "LesniPudaSeStromy":        "sym405",     # 6.07 (nový název)
-            "LesniPozemek":             "sym405",     # 6.07 (starý název)
-            "LesniPudaSKrovinatymPorostem": "sym411", # 6.08 (nový název)
-            "HustyPorost":              "sym411",     # 6.08 (starý název)
-            "Raseliniste":              "sym307",     # 6.14
-            "VyznamnyNeboOsamelyStromLesik": "sym417a",  # 6.11
-            "LesniPrusek":              "sym508",     # 6.13 (nový název)
-            "Proseka":                  "sym508",     # 6.13 (starý název)
-            # 7. Terénní reliéf
-            "SkalniUtvary":             "sym214",     # 7.06 (nový název)
-            "SkalniUtvar":              "sym214",     # 7.06 (starý název)
-            "OsamelyBalvanSkalaSkalniSuk": "sym205",  # 7.10
-            "StupeSraz":                "sym104",     # 7.12 (nový název)
-            "StupenSraz":               "sym104",     # 7.12 (varianta)
-            "SkalniSraz":               "sym201",     # původně jako skála
-        }
-
-        for zab_key, sym_key in ZAB_MAP.items():
-            gdf_z = zabaged_gdfs.get(zab_key)
-            if gdf_z is not None and not gdf_z.empty:
-                collector.collect(sym_key, gdf_z)
-
-        # ISOM vlastní vrstvy
-        for isom_key, gdf_i in isom_gdfs.items():
-            if gdf_i is None or gdf_i.empty:
-                continue
-            # Klíč je název souboru = kód ISOM
-            clean_key = isom_key.replace(".shp", "").replace(".SHP", "")
-            collector.collect(clean_key, gdf_i)
-
         collector.export(gpkg_path)
     except Exception as e:
         import traceback; traceback.print_exc()

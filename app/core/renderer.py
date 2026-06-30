@@ -247,6 +247,7 @@ def render_map(
     layer_visibility,
     output_png_path,
     progress_cb=None,
+    collector=None,
 ) -> dict:
     """
     Sestaví matplotlib mapu a uloží ji jako PNG + world file.
@@ -361,6 +362,7 @@ def render_map(
         isom_gdfs=isom_gdfs,
         sym_library=sym_library,
         current_crs=current_crs,
+        collector=collector,
     )
 
     # Uložení PNG
